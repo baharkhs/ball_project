@@ -1,0 +1,89 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.so
+
+# C extensions
+*.o
+*.obj
+*.dll
+*.pyc
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environment
+venv/
+env/
+.venv/
+.env/
+
+# IDE settings (e.g., for PyCharm)
+.idea/
+.vscode/
+*.sublime-workspace
+*.sublime-project
+
+# Pytest
+.pytest_cache/
+.tox/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# macOS and other system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+.coverage
+.coverage.*
+cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Temporary files
+*.tmp
+*.log
+*.swp
+.sass-cache/
+.mypy_cache/
+.pdm/
+.envrc
+
+# Output files (e.g., from animations or results)
+*.mp4
+*.avi
+*.gif
+*.mov
+
+# Ignore config and example JSON files, if they are environment-specific
+examples/*.json
+config.json
+simulation_output.json
