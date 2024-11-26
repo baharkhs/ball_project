@@ -97,7 +97,7 @@ class Ball:
         """Compute the repulsive force exerted by another ball."""
         displacement = self.position - other.position
         distance = np.linalg.norm(displacement)
-        if distance == 0 or distance > 2 * self.radius:  # Ignore if too far or overlapping
+        if distance == 0 or distance > 5 * self.radius:  # Ignore if too far or overlapping
             return np.zeros(3)
 
         # Cap the repulsion force to avoid excessive acceleration
@@ -243,7 +243,6 @@ class Simulation:
         # Reset forces for all balls
         for ball in self.balls:
             ball.force = np.zeros(3)
-            ball.original_velocity = ball.velocity.copy()  # Save the current velocity
 
         # Compute pairwise repulsion forces
         for i in range(num_balls):
@@ -260,11 +259,9 @@ class Simulation:
             # Apply acceleration to velocity
             ball.velocity += acceleration * self.dt
 
-            # Normalize velocity if it exceeds the original value
-            original_speed = np.linalg.norm(ball.initial_velocity)
-            current_speed = np.linalg.norm(ball.velocity)
-            if current_speed > original_speed:
-                ball.velocity *= (original_speed / current_speed)
+            # Apply gradual velocity decay to reduce deviations
+            decay_factor = 0.9999999999
+            ball.velocity = decay_factor * ball.velocity
 
             # Update position
             ball.position += ball.velocity * self.dt
