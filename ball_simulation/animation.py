@@ -17,21 +17,33 @@ class Well:
     def apply_pbc(self, position):
         """
         Applies periodic boundary conditions (PBC) along the z-axis only, wrapping particles
-        between the top and bottom boundaries.
+        between the top and bottom boundaries of the well.
+
+        This method checks if the particle's z-coordinate exceeds the boundaries of the well
+        (either above the top or below the bottom). If so, the z-coordinate is adjusted to wrap
+        the particle around the opposite boundary. A flag is returned to indicate if the particle
+        underwent a PBC transition.
 
         Args:
-            position (np.array): The [x, y, z] position of the particle.
+            position (np.array): The [x, y, z] position of the particle in angstroms.
 
         Returns:
-            tuple: The modified position and a Boolean indicating if a PBC transition occurred.
+            tuple:
+                np.array: The modified position after applying PBC.
+                bool: True if the particle underwent a PBC transition, False otherwise.
         """
-        wrapped = False
+        wrapped = False  # Flag to track if a PBC transition occurred
+
+        # Check if the particle is above the top boundary
         if position[2] > self.height:
             position[2] -= self.height  # Wrap to the bottom
             wrapped = True
+
+        # Check if the particle is below the bottom boundary
         elif position[2] < 0:
             position[2] += self.height  # Wrap to the top
             wrapped = True
+
         return position, wrapped
 
     def apply_bounce(self, ball):
@@ -58,8 +70,6 @@ class Well:
         return ball.velocity
 
 
-import numpy as np
-
 
 class Ball:
     def __init__(self, mass=18.0, initial_position=None, initial_velocity=None):
@@ -77,10 +87,24 @@ class Ball:
         self.initial_velocity = self.velocity.copy()  # Store original velocity for calculations
         self.path_segments = []  # Stores path segments as lists of [x, y, z] positions
         self.current_path_segment = {"x": [], "y": [], "z": []}
-        self.force = np.zeros(3)  # Force acting on the particle
         # self.gravity = gravity  # Placeholder for future gravity implementation
         self.skip_path_update = False  # For handling periodic boundary condition resets
         self.temperature = self.calculate_temperature()  # Temperature of the particle (K)
+        self.force = np.zeros(3)  # Total force acting on the ball
+        self.radius = 0.1  # Radius of the ball for collisions
+
+    def compute_repulsion_force(self, other, repulsion_constant=1.0):
+        """Compute the repulsive force exerted by another ball."""
+        displacement = self.position - other.position
+        distance = np.linalg.norm(displacement)
+        if distance == 0 or distance > 2 * self.radius:  # Ignore if too far or overlapping
+            return np.zeros(3)
+
+        # Cap the repulsion force to avoid excessive acceleration
+        max_force = 10.0
+        force_magnitude = min(repulsion_constant / (distance ** 2), max_force)
+        force_direction = displacement / distance  # Unit vector
+        return force_magnitude * force_direction
 
     def calculate_kinetic_energy(self):
         """
@@ -123,14 +147,13 @@ class Ball:
         self.position += self.velocity * dt  # Position update based on current velocity
 
     def update_path(self):
-        """
-        Records the particle's position for path visualization, handling periodic boundary condition (PBC) transitions.
-        """
+        """Records the particle's position for path visualization, handling PBC transitions."""
         if self.skip_path_update:
-            if self.current_path_segment["x"]:  # Only finalize if there's data in the segment
+            # Start a new segment if skip_path_update is set
+            if self.current_path_segment["x"]:
                 self.path_segments.append(self.current_path_segment)
-            self.current_path_segment = {"x": [], "y": [], "z": []}  # Start a new segment
-            self.skip_path_update = False  # Reset the flag after transition
+            self.current_path_segment = {"x": [], "y": [], "z": []}
+            self.skip_path_update = False  # Reset the flag
         else:
             # Append current position to the ongoing segment
             self.current_path_segment["x"].append(self.position[0])
@@ -138,23 +161,20 @@ class Ball:
             self.current_path_segment["z"].append(self.position[2])
 
     def finalize_path(self):
-        """
-        Finalizes and stores the current path segment at the end of the simulation.
-        """
-        if self.current_path_segment["x"]:  # Only save if there are points in the segment
+        """Finalizes and stores the current path segment at the end of the simulation."""
+        if self.current_path_segment["x"]:
             self.path_segments.append(self.current_path_segment)
 
     def get_path_segments(self):
+        """Returns all path segments for visualization."""
+        return self.path_segments + [self.current_path_segment]
+
+    def finalize_simulation(self):
         """
-        Returns all path segments for visualization.
-
-        Returns:
-            list: Path segments containing x, y, and z positions.
+        Finalizes the path for each ball at the end of the simulation.
         """
-        return self.path_segments + [self.current_path_segment]  # Include ongoing segment
-
-
-import numpy as np
+        for ball in self.balls:
+            ball.finalize_path()
 
 
 class Simulation:
@@ -214,13 +234,40 @@ class Simulation:
     def apply_monte_carlo_movement(self, ball):
         """Applies Monte Carlo random walk movement to the ball."""
         random_step = np.random.uniform(-0.05, 0.05, size=3)
-        ball.position += random_step * self.dt
+        ball.position += random_step  # Remove dt scaling
 
     def update(self):
         """Updates each ball's position, velocity, and handles boundary conditions."""
+        num_balls = len(self.balls)
+
+        # Reset forces for all balls
         for ball in self.balls:
-            ball.apply_forces()  # Apply forces (e.g., gravity if implemented in future)
-            self.apply_movement(ball)  # Apply movement based on system movement type
+            ball.force = np.zeros(3)
+            ball.original_velocity = ball.velocity.copy()  # Save the current velocity
+
+        # Compute pairwise repulsion forces
+        for i in range(num_balls):
+            for j in range(i + 1, num_balls):  # Avoid double-calculating forces
+                repulsion_force = self.balls[i].compute_repulsion_force(self.balls[j])
+                self.balls[i].force += repulsion_force
+                self.balls[j].force -= repulsion_force
+
+        # Update velocity and position for each ball
+        for ball in self.balls:
+            # Compute acceleration due to forces
+            acceleration = ball.force / ball.mass
+
+            # Apply acceleration to velocity
+            ball.velocity += acceleration * self.dt
+
+            # Normalize velocity if it exceeds the original value
+            original_speed = np.linalg.norm(ball.initial_velocity)
+            current_speed = np.linalg.norm(ball.velocity)
+            if current_speed > original_speed:
+                ball.velocity *= (original_speed / current_speed)
+
+            # Update position
+            ball.position += ball.velocity * self.dt
 
             # Apply bounce and periodic boundary conditions
             ball.velocity = self.well.apply_bounce(ball)
@@ -235,3 +282,14 @@ class Simulation:
         for ball in self.balls:
             ball.finalize_path()
 
+    def run(self):
+        """
+        Executes the simulation loop.
+        """
+        current_time = 0.0
+        while current_time < self.total_time:
+            self.update()  # Update all ball positions, velocities, and forces
+            current_time += self.dt
+
+        # Finalize the simulation by processing results
+        self.finalize_simulation()
