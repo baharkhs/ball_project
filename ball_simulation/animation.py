@@ -65,9 +65,45 @@ class Well:
             # Reflect velocity across the boundary normal direction
             ball.velocity[:2] -= 2 * np.dot(ball.velocity[:2], normal_direction) * normal_direction
             # Adjust position to keep within the boundary (adjustment based on angstrom scale)
-            ball.position[:2] = normal_direction * (self.radius - 1e-10)
+            ball.position[:2] = normal_direction * (self.radius - 0)
+            #1e-10
 
         return ball.velocity
+
+    def compute_wall_repulsion_force(self, ball, repulsion_constant=1.0):
+        """
+        Computes a repulsive force between a ball and the well walls.
+
+        Args:
+            ball (Ball): The ball object.
+            repulsion_constant (float): Strength of the repulsion force.
+
+        Returns:
+            np.array: The repulsion force vector acting on the ball.
+        """
+        force = np.zeros(3)
+
+        # Check for repulsion from the cylindrical wall (x-y boundary)
+        distance_from_center = np.linalg.norm(ball.position[:2])
+        if distance_from_center >= self.radius - ball.radius:
+            overlap = ball.radius - (self.radius - distance_from_center)  # Penetration depth
+            if overlap > 0:
+                normal_direction = ball.position[:2] / distance_from_center
+                repulsion_magnitude = repulsion_constant * overlap
+                force[:2] = -repulsion_magnitude * normal_direction  # Force pushes inward
+
+        # Check for repulsion from the z boundaries
+        if ball.position[2] < ball.radius:  # Bottom wall
+            overlap = ball.radius - ball.position[2]
+            if overlap > 0:
+                force[2] += repulsion_constant * overlap
+
+        elif ball.position[2] > self.height - ball.radius:  # Top wall
+            overlap = ball.radius - (self.height - ball.position[2])
+            if overlap > 0:
+                force[2] -= repulsion_constant * overlap
+
+        return force
 
 
 
@@ -92,6 +128,7 @@ class Ball:
         self.temperature = self.calculate_temperature()  # Temperature of the particle (K)
         self.force = np.zeros(3)  # Total force acting on the ball
         self.radius = 0.1  # Radius of the ball for collisions
+
 
     def compute_repulsion_force(self, other, repulsion_constant=1.0):
         """Compute the repulsive force exerted by another ball."""
@@ -251,6 +288,11 @@ class Simulation:
                 self.balls[i].force += repulsion_force
                 self.balls[j].force -= repulsion_force
 
+         # Compute wall repulsion forces
+        for ball in self.balls:
+            wall_repulsion_force = self.well.compute_wall_repulsion_force(ball)
+            ball.force += wall_repulsion_force
+
         # Update velocity and position for each ball
         for ball in self.balls:
             # Compute acceleration due to forces
@@ -260,7 +302,7 @@ class Simulation:
             ball.velocity += acceleration * self.dt
 
             # Apply gradual velocity decay to reduce deviations
-            decay_factor = 0.9999999999
+            decay_factor = 1
             ball.velocity = decay_factor * ball.velocity
 
             # Update position
