@@ -1,6 +1,18 @@
 import numpy as np
 
-import numpy as np
+
+
+
+#def log(message, level=1):
+
+    #Simple logging function to control verbosity of debug output.
+
+    #Args:
+        #message (str): The message to log.
+        #level (int): The log level. Logs only if DEBUG_LEVEL >= level.
+
+    #if DEBUG_LEVEL >= level:
+        #print(message)
 
 class Well:
     def __init__(self, radius=5.0, height=10.0):
@@ -19,31 +31,19 @@ class Well:
         Applies periodic boundary conditions (PBC) along the z-axis only, wrapping particles
         between the top and bottom boundaries of the well.
 
-        This method checks if the particle's z-coordinate exceeds the boundaries of the well
-        (either above the top or below the bottom). If so, the z-coordinate is adjusted to wrap
-        the particle around the opposite boundary. A flag is returned to indicate if the particle
-        underwent a PBC transition.
-
-        Args:
-            position (np.array): The [x, y, z] position of the particle in angstroms.
-
         Returns:
-            tuple:
-                np.array: The modified position after applying PBC.
-                bool: True if the particle underwent a PBC transition, False otherwise.
+            tuple: (modified position, whether PBC transition occurred)
         """
-        wrapped = False  # Flag to track if a PBC transition occurred
-
-        # Check if the particle is above the top boundary
+        wrapped = False
         if position[2] > self.height:
-            position[2] -= self.height  # Wrap to the bottom
+            #log(f"PBC wrap: ball moved from {position[2]} to {position[2] - self.height}", level=2)
+            position[2] -= self.height
             wrapped = True
-
-        # Check if the particle is below the bottom boundary
         elif position[2] < 0:
-            position[2] += self.height  # Wrap to the top
+            #log(f"PBC wrap: ball moved from {position[2]} to {position[2] + self.height}", level=2)
+            position[2] += self.height
             wrapped = True
-
+        #log(f"apply_pbc: wrapped={wrapped}, position={position}", level=2)  # Add this log
         return position, wrapped
 
     def apply_bounce(self, ball):
@@ -115,103 +115,121 @@ class Ball:
         Args:
             mass (float): Mass of the particle in atomic mass units (amu).
             initial_position (array-like): Initial [x, y, z] position in angstroms.
-            initial_velocity (array-like): Initial [vx, vy, vz] velocity in angstroms per fs.
+            initial_velocity (array-like): Initial [vx, vy, vz] velocity in angstroms per femtosecond (fs).
         """
-        self.mass = mass  # Mass in atomic mass units (amu)
-        self.position = np.array(initial_position) if initial_position is not None else np.array([0, 0, 0])
-        self.velocity = np.array(initial_velocity if initial_velocity else [0, 0, 0])
-        self.initial_velocity = self.velocity.copy()  # Store original velocity for calculations
-        self.path_segments = []  # Stores path segments as lists of [x, y, z] positions
-        self.current_path_segment = {"x": [], "y": [], "z": []}
-        # self.gravity = gravity  # Placeholder for future gravity implementation
-        self.skip_path_update = False  # For handling periodic boundary condition resets
-        self.temperature = self.calculate_temperature()  # Temperature of the particle (K)
-        self.force = np.zeros(3)  # Total force acting on the ball
-        self.radius = 0.1  # Radius of the ball for collisions
-
+        self.mass = mass  # Mass in atomic mass units (amu).
+        self.position = np.array(initial_position) if initial_position is not None else np.array([0.0, 0.0, 0.0])
+        self.velocity = np.array(initial_velocity, dtype=float) if initial_velocity is not None else np.array([0.0, 0.0, 0.0])
+        self.initial_velocity = self.velocity.copy()  # Store the initial velocity for reference or reuse.
+        self.path_segments = []  # Stores completed path segments for visualization.
+        self.current_path_segment = {"x": [], "y": [], "z": []}  # Tracks the ongoing path segment.
+        self.skip_path_update = False  # Flag to indicate if path updates should be skipped (e.g., during PBC transitions).
+        self.temperature = self.calculate_temperature()  # Calculate the initial temperature of the ball.
+        self.force = np.zeros(3)  # Initialize the force acting on the ball to zero.
+        self.radius = 0.1  # Radius of the ball, used for collision detection or wall interactions.
 
     def compute_repulsion_force(self, other, repulsion_constant=1.0):
-        """Compute the repulsive force exerted by another ball."""
-        displacement = self.position - other.position
-        distance = np.linalg.norm(displacement)
-        if distance == 0 or distance > 5 * self.radius:  # Ignore if too far or overlapping
+        """
+        Compute the repulsive force exerted by another ball.
+
+        Args:
+            other (Ball): The other ball in the simulation.
+            repulsion_constant (float): Constant controlling the strength of repulsion.
+
+        Returns:
+            np.array: The repulsive force vector acting on the ball.
+        """
+        displacement = self.position - other.position  # Vector from the other ball to this ball.
+        distance = np.linalg.norm(displacement)  # Compute the distance between the two balls.
+        if distance == 0 or distance > 5 * self.radius:  # Ignore if the balls are too far apart or overlapping.
             return np.zeros(3)
 
-        # Cap the repulsion force to avoid excessive acceleration
+        # Cap the repulsion force to avoid excessive acceleration.
         max_force = 10.0
-        force_magnitude = min(repulsion_constant / (distance ** 2), max_force)
-        force_direction = displacement / distance  # Unit vector
-        return force_magnitude * force_direction
+        force_magnitude = min(repulsion_constant / (distance ** 2), max_force)  # Inverse-square law for repulsion.
+        force_direction = displacement / distance  # Normalize the displacement vector to get direction.
+        return force_magnitude * force_direction  # Return the force vector.
 
     def calculate_kinetic_energy(self):
         """
-        Calculates and returns the kinetic energy (KE) in atomic units.
+        Calculates and returns the kinetic energy (KE) of the ball.
 
         Returns:
-            float: Kinetic energy in (amu * (angstrom/fs)^2).
+            float: Kinetic energy in atomic units (amu * (angstrom/fs)^2).
         """
-        return 0.5 * self.mass * np.dot(self.velocity, self.velocity)
+        return 0.5 * self.mass * np.dot(self.velocity, self.velocity)  # KE = 0.5 * m * v^2.
 
     def calculate_temperature(self):
         """
-        Calculates and updates the particle's temperature based on its kinetic energy.
+        Calculates the temperature of the ball based on its kinetic energy.
 
         Returns:
             float: Temperature in Kelvin (K).
         """
-        # Boltzmann constant (in units compatible with angstrom/fs and amu)
-        k_B = 0.0083144621  # Boltzmann constant in atomic units
-        kinetic_energy = self.calculate_kinetic_energy()
-        self.temperature = (2 / 3) * (kinetic_energy / k_B)
-        return self.temperature
+        k_B = 0.0083144621  # Boltzmann constant in atomic units (amu * (angstrom/fs)^2 / K).
+        kinetic_energy = self.calculate_kinetic_energy()  # Compute kinetic energy.
+        return (2 / 3) * (kinetic_energy / k_B)  # Relate KE to temperature (classical thermodynamics).
 
     def apply_forces(self):
         """
-        Placeholder for applying forces to the ball (e.g., gravity).
+        Placeholder for applying external forces (e.g., gravity) to the ball.
         """
-        # self.force = self.mass * self.gravity  # Placeholder for future gravity application
+        # Extend this method in the future to include external forces (e.g., gravity or electric fields).
         pass
 
     def update_velocity_position(self, dt):
         """
-        Updates the particle's position based on velocity and time step.
+        Updates the velocity and position of the ball based on the time step.
 
         Args:
             dt (float): Time step in femtoseconds.
         """
-        # acceleration = self.force / self.mass  # Uncomment if force-based acceleration is applied
-        # self.velocity += acceleration * dt  # Update velocity if forces are active
-        self.position += self.velocity * dt  # Position update based on current velocity
+        # Update the position using velocity (Newtonian motion: x = x + v * dt).
+        self.position += self.velocity * dt
 
     def update_path(self):
-        """Records the particle's position for path visualization, handling PBC transitions."""
+        """
+        Records the ball's position for path visualization. Handles PBC transitions
+        and avoids adding positions exactly at PBC boundaries to the path.
+        """
         if self.skip_path_update:
-            # Start a new segment if skip_path_update is set
+            # If a PBC transition occurred, finalize the current segment and start a new one.
             if self.current_path_segment["x"]:
                 self.path_segments.append(self.current_path_segment)
             self.current_path_segment = {"x": [], "y": [], "z": []}
-            self.skip_path_update = False  # Reset the flag
+            self.skip_path_update = False  # Reset the flag for future updates.
         else:
-            # Append current position to the ongoing segment
+            # Skip recording the path if the ball is exactly at the PBC boundary.
+            if self.position[2] == 0 or self.position[2] == self.radius:
+                return
+
+            # Otherwise, update the ongoing path segment.
             self.current_path_segment["x"].append(self.position[0])
             self.current_path_segment["y"].append(self.position[1])
             self.current_path_segment["z"].append(self.position[2])
 
     def finalize_path(self):
-        """Finalizes and stores the current path segment at the end of the simulation."""
-        if self.current_path_segment["x"]:
-            self.path_segments.append(self.current_path_segment)
+        """
+        Finalizes and stores the current path segment at the end of the simulation.
+        """
+        if self.current_path_segment["x"]:  # Check if the current path segment contains data.
+            self.path_segments.append(self.current_path_segment)  # Store the segment.
 
     def get_path_segments(self):
-        """Returns all path segments for visualization."""
-        return self.path_segments + [self.current_path_segment]
+        """
+        Returns all path segments for visualization.
+
+        Returns:
+            list: A list of all recorded path segments, including the current one.
+        """
+        return self.path_segments + [self.current_path_segment]  # Include the current segment.
 
     def finalize_simulation(self):
         """
-        Finalizes the path for each ball at the end of the simulation.
+        Finalizes the path for the ball at the end of the simulation.
         """
-        for ball in self.balls:
-            ball.finalize_path()
+        self.finalize_path()  # Ensure the current path segment is stored.
+
 
 
 class Simulation:
@@ -226,11 +244,11 @@ class Simulation:
             dt (float): Time step in femtoseconds.
             movement_type (str): Movement type for particles; "newtonian" or "monte_carlo".
         """
-        self.well = Well(well_radius, well_height)
-        self.dt = dt
-        self.total_time = total_time
-        self.balls = []
-        self.movement_type = movement_type  # Define system-wide movement type for all balls
+        self.well = Well(well_radius, well_height)  # Initialize the cylindrical well.
+        self.dt = dt  # Time step for each simulation iteration.
+        self.total_time = total_time  # Total simulation time.
+        self.balls = []  # A list to hold all ball objects in the simulation.
+        self.movement_type = movement_type  # Type of movement for the simulation: "newtonian" or "monte_carlo".
 
     def set_movement_type(self, movement_type="newtonian"):
         """Sets the movement type for all balls in the simulation."""
@@ -244,15 +262,15 @@ class Simulation:
     def calculate_average_velocity(self):
         """Calculates the average velocity magnitude of all balls in the simulation."""
         if self.balls:
-            velocities = [np.linalg.norm(ball.velocity) for ball in self.balls]
-            return np.mean(velocities)
+            velocities = [np.linalg.norm(ball.velocity) for ball in self.balls]  # Get magnitude of each ball's velocity.
+            return np.mean(velocities)  # Return the average of all velocities.
         return 0.0
 
     def calculate_average_temperature(self):
         """Calculates the average temperature of all balls in the simulation."""
         if self.balls:
-            temperatures = [ball.calculate_temperature() for ball in self.balls]
-            return np.mean(temperatures)
+            temperatures = [ball.calculate_temperature() for ball in self.balls]  # Get temperature for each ball.
+            return np.mean(temperatures)  # Return the average temperature.
         return 0.0
 
     def calculate_volume(self):
@@ -262,58 +280,70 @@ class Simulation:
     def apply_movement(self, ball):
         """Applies movement to a ball based on the set movement type."""
         if self.movement_type == "newtonian":
-            ball.update_velocity_position(self.dt)
+            ball.update_velocity_position(self.dt)  # Update position based on velocity for Newtonian motion.
         elif self.movement_type == "monte_carlo":
-            self.apply_monte_carlo_movement(ball)
+            self.apply_monte_carlo_movement(ball)  # Apply random walk for Monte Carlo movement.
         else:
             raise ValueError(f"Unknown movement type: {self.movement_type}")
 
     def apply_monte_carlo_movement(self, ball):
-        """Applies Monte Carlo random walk movement to the ball."""
-        random_step = np.random.uniform(-0.05, 0.05, size=3)
-        ball.position += random_step  # Remove dt scaling
+        """
+        Applies Monte Carlo random walk movement to the ball.
+        """
+        max_step_size = 0.01  # Define the maximum random step size in each dimension.
+        random_step = np.random.uniform(-max_step_size, max_step_size, size=3)  # Generate random step in x, y, z.
+        ball.position += random_step  # Update the ball's position.
 
     def update(self):
-        """Updates each ball's position, velocity, and handles boundary conditions."""
-        num_balls = len(self.balls)
+        """
+        Updates each ball's position, velocity, and handles boundary conditions.
+        """
+        num_balls = len(self.balls)  # Get the total number of balls in the simulation.
+        num_pbc_transitions = 0  # Counter for periodic boundary condition (PBC) transitions.
 
         # Reset forces for all balls
         for ball in self.balls:
-            ball.force = np.zeros(3)
+            ball.force = np.zeros(3)  # Reset the force vector for each ball to zero.
 
-        # Compute pairwise repulsion forces
+        # Compute pairwise repulsion forces between balls
         for i in range(num_balls):
-            for j in range(i + 1, num_balls):  # Avoid double-calculating forces
+            for j in range(i + 1, num_balls):  # Avoid double-calculating forces.
                 repulsion_force = self.balls[i].compute_repulsion_force(self.balls[j])
-                self.balls[i].force += repulsion_force
-                self.balls[j].force -= repulsion_force
+                self.balls[i].force += repulsion_force  # Add the repulsion force to ball i.
+                self.balls[j].force -= repulsion_force  # Apply equal and opposite force to ball j.
 
-         # Compute wall repulsion forces
+        # Compute wall repulsion forces
         for ball in self.balls:
-            wall_repulsion_force = self.well.compute_wall_repulsion_force(ball)
-            ball.force += wall_repulsion_force
+            wall_repulsion_force = self.well.compute_wall_repulsion_force(ball)  # Calculate force from the wall.
+            ball.force += wall_repulsion_force  # Add the wall repulsion force to the ball's total force.
 
         # Update velocity and position for each ball
         for ball in self.balls:
-            # Compute acceleration due to forces
-            acceleration = ball.force / ball.mass
+            if self.movement_type == "monte_carlo":
+                # Apply Monte Carlo movement
+                self.apply_monte_carlo_movement(ball)
+            else:
+                # Apply acceleration for Newtonian movement
+                acceleration = ball.force / ball.mass  # Calculate acceleration using F = ma.
+                ball.velocity += acceleration * self.dt  # Update velocity using v = u + at.
+                ball.position += ball.velocity * self.dt  # Update position using x = x + vt.
 
-            # Apply acceleration to velocity
-            ball.velocity += acceleration * self.dt
-
-            # Apply gradual velocity decay to reduce deviations
-            decay_factor = 1
-            ball.velocity = decay_factor * ball.velocity
-
-            # Update position
-            ball.position += ball.velocity * self.dt
+                # Apply gradual velocity decay (keep for future use)
+                decay_factor = 1
+                ball.velocity = decay_factor * ball.velocity  # Reduce velocity for damping effects.
 
             # Apply bounce and periodic boundary conditions
-            ball.velocity = self.well.apply_bounce(ball)
-            ball.position, wrapped = self.well.apply_pbc(ball.position)
+            ball.velocity = self.well.apply_bounce(ball)  # Check and handle bounces on the cylindrical wall.
+            ball.position, wrapped = self.well.apply_pbc(ball.position)  # Handle PBC on the z-axis.
 
-            # Update path with handling of PBC transition
-            ball.skip_path_update = wrapped
+            # Handle PBC transition: defer adding wrapped position to path
+            if wrapped:
+                num_pbc_transitions += 1  # Increment the PBC transition counter.
+                ball.skip_path_update = True  # Mark PBC transition.
+            else:
+                ball.skip_path_update = False  # Reset if no transition.
+
+            # Update path (skip wrapped positions)
             ball.update_path()
 
     def finalize_simulation(self):
@@ -327,8 +357,12 @@ class Simulation:
         """
         current_time = 0.0
         while current_time < self.total_time:
-            self.update()  # Update all ball positions, velocities, and forces
-            current_time += self.dt
+            self.update()  # Update all ball positions, velocities, and forces.
+            current_time += self.dt  # Increment the current time by the time step.
 
-        # Finalize the simulation by processing results
+        # Finalize the simulation by processing results.
         self.finalize_simulation()
+
+
+
+
