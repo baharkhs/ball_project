@@ -64,10 +64,17 @@ def setup_simulation(config):
         sim.add_ball(
             mass=ball_config["mass"],
             initial_position=ball_config["initial_position"],
-            initial_velocity=ball_config["initial_velocity"]
+            initial_velocity=ball_config["initial_velocity"],
+            species=ball_config.get("species", "O"),
+            molecule_id=ball_config.get("molecule_id", None)
         )
 
+    for ball in sim.balls:
+        print(f"Initial velocity of {ball.species} ball: {ball.velocity}")
+
     return sim
+
+
 
 
 def update_animation(frame, sim, ball_plots, path_plots, ball_configs):
@@ -86,21 +93,21 @@ def update_animation(frame, sim, ball_plots, path_plots, ball_configs):
     """
     sim.update()
 
+    # Print the average temperature and total energy for diagnostics
+    print(f"Frame {frame}: Average Temperature = {sim.average_temperature:.2f} K, Total Energy = {sim.total_energy:.2f}")
+
     for i, ball in enumerate(sim.balls):
-        # Update ball positions
+        # Update ball position
         ball_plots[i].set_data([ball.position[0]], [ball.position[1]])
         ball_plots[i].set_3d_properties([ball.position[2]])
-        ball_plots[i].set_color(ball_configs[i]["color"])
-        ball_plots[i].set_markersize(ball_configs[i]["size"])
 
-        # Update paths
-        x_path, y_path, z_path = [], [], []
-        for segment in ball.get_path_segments():
-            x_path += segment["x"]
-            y_path += segment["y"]
-            z_path += segment["z"]
-        path_plots[i].set_data(x_path, y_path)
-        path_plots[i].set_3d_properties(z_path)
+        # Update paths with validation
+        path_data = ball.get_path_segments()
+        if path_data:
+            latest_segment = path_data[-1]
+            if len(latest_segment["x"]) > 0:
+                path_plots[i].set_data(latest_segment["x"], latest_segment["y"])
+                path_plots[i].set_3d_properties(latest_segment["z"])
 
     return ball_plots + path_plots
 
@@ -126,42 +133,68 @@ def visualize_simulation(sim, config):
     ax.set_zlabel("Z (Å)")
 
     # Draw the well boundary as a cylinder
-    theta = np.linspace(0, 2 * np.pi, 100)
-    z = np.linspace(0, sim.well.height, 50)
+    theta = np.linspace(0, 2 * np.pi, 150)
+    z = np.linspace(0, sim.well.height, 75)
     theta, z = np.meshgrid(theta, z)
     x = sim.well.radius * np.cos(theta)
     y = sim.well.radius * np.sin(theta)
-    ax.plot_wireframe(x, y, z, color="gray", alpha=0.3)
+    ax.plot_wireframe(x, y, z, color="gray", alpha=0.3, linestyle="dotted", linewidth=0.5)
 
     # Initialize ball and path plots
     ball_configs = config["balls"]
-    ball_plots = [ax.plot([], [], [], 'o', color=ball["color"], markersize=ball["size"])[0] for ball in ball_configs]
-    path_plots = [ax.plot([], [], [], color=ball["color"], linewidth=0.8)[0] for ball in ball_configs]
+    ball_plots = [
+        ax.plot([], [], [], 'o', color=ball["color"], markersize=ball["size"])[0] for ball in ball_configs
+    ]
+    path_plots = [
+        ax.plot([], [], [], color=ball["color"], linewidth=0.8)[0] for ball in ball_configs
+    ]
 
-    def update_animation(frame, sim, ball_plots, path_plots):
-        """Updates the animation for each frame."""
-        sim.update()
-        for i, ball in enumerate(sim.balls):
-            # Update ball position
-            ball_plots[i].set_data([ball.position[0]], [ball.position[1]])
-            ball_plots[i].set_3d_properties([ball.position[2]])
-
-            # Update path
-            path_data = ball.get_path_segments()
-            for segment in path_data:
-                path_plots[i].set_data(segment["x"], segment["y"])
-                path_plots[i].set_3d_properties(segment["z"])
-
-        return ball_plots + path_plots
+    # Add a legend for ball types
+    unique_species = set([ball["species"] for ball in ball_configs])
+    for species in unique_species:
+        ax.scatter([], [], [], label=f"Species: {species}", s=50)
+    ax.legend(loc="upper right", title="Legend")
 
     # Create the animation
     ani = animation.FuncAnimation(
-        fig, update_animation, frames=int(sim.total_time / sim.dt), interval=sim.dt * 1000,
-        fargs=(sim, ball_plots, path_plots)
+        fig,
+        update_animation,
+        frames=int(sim.total_time / sim.dt),
+        interval=sim.dt * 1000,
+        fargs=(sim, ball_plots, path_plots, ball_configs),
     )
 
     plt.show()
 
+
+def plot_temperature_vs_time(sim, target_temperature=None):
+    """
+    Plots the temperature of the system as a function of time for diagnostics.
+
+    Args:
+        sim (Simulation): The simulation object.
+        target_temperature (float, optional): Target temperature for comparison.
+    """
+    temperatures = []
+    time_steps = []
+
+    current_time = 0.0
+    while current_time < sim.total_time:
+        sim.update()
+        temperatures.append(sim.average_temperature)
+        time_steps.append(current_time)
+        current_time += sim.dt
+
+    plt.figure()
+    plt.plot(time_steps, temperatures, label="Average Temperature", color="blue")
+    if target_temperature:
+        plt.axhline(y=target_temperature, color="red", linestyle="--", label="Target Temperature")
+    plt.xlabel("Time (fs)")
+    plt.ylabel("Temperature (K)")
+    plt.title("Temperature vs Time")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.show()
 
 
 def main():
@@ -178,8 +211,15 @@ def main():
     # Set up the simulation
     sim = setup_simulation(config)
 
-    # Visualize the simulation
+    # Target temperature for rescaling (if needed)
+    target_temperature = 300.0
+
+    # Plot diagnostics
+    plot_temperature_vs_time(sim, target_temperature=target_temperature)
+
+    # Visualize simulation
     visualize_simulation(sim, config)
+
 
 if __name__ == "__main__":
     main()
