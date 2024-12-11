@@ -6,7 +6,7 @@
     },
     "simulation": {
       "total_time": 20.0,
-      "dt": 0.02,
+      "dt": 0.01,
       "movement_type": "newtonian"
     },
     "balls": [

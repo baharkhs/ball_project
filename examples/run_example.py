@@ -1,4 +1,3 @@
-import sys
 import os
 import json
 from ball_simulation.animation import Simulation
@@ -9,7 +8,6 @@ import numpy as np
 
 # Debugging: Print the current working directory
 print("Current working directory:", os.getcwd())
-
 
 def load_simulation_config(config_path="config.json", mode="newtonian"):
     """
@@ -22,7 +20,7 @@ def load_simulation_config(config_path="config.json", mode="newtonian"):
     Returns:
         dict: Configuration dictionary for the specified mode.
     """
-    # Resolve the absolute path relative to the script's directory
+    # Do NOT change this line related to reading the json file:
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     config_path = os.path.join(project_root, config_path)
 
@@ -36,7 +34,6 @@ def load_simulation_config(config_path="config.json", mode="newtonian"):
         raise ValueError(f"Mode '{mode}' not found in the configuration file.")
 
     return config[mode]
-
 
 def setup_simulation(config):
     """
@@ -55,11 +52,11 @@ def setup_simulation(config):
     dt = config["simulation"]["dt"]
     movement_type = config["simulation"]["movement_type"]
 
-    # Initialize the simulation
+    # Initialize the simulation object
     sim = Simulation(well_radius=well_radius, well_height=well_height, total_time=total_time, dt=dt)
     sim.set_movement_type(movement_type)
 
-    # Add balls to the simulation
+    # Add balls from config
     for ball_config in config["balls"]:
         sim.add_ball(
             mass=ball_config["mass"],
@@ -69,58 +66,53 @@ def setup_simulation(config):
             molecule_id=ball_config.get("molecule_id", None)
         )
 
-    for ball in sim.balls:
-        print(f"Initial velocity of {ball.species} ball: {ball.velocity}")
+    # Stabilize initial conditions by rescaling to a reasonable temperature (e.g., 300 K)
+    sim.rescale_temperatures(300.0, decay_factor=1.0)  # Immediate rescale to a stable temperature
 
     return sim
 
-
-
-
-def update_animation(frame, sim, ball_plots, path_plots, ball_configs):
+def update_animation(frame, sim, ball_plots, path_plots, ball_configs, times, temperatures):
     """
-    Updates the animation for each frame.
+    Update function for Matplotlib's FuncAnimation.
 
-    Args:
-        frame (int): Current frame number (not used but required by FuncAnimation).
-        sim (Simulation): The simulation object to update.
-        ball_plots (list): List of Matplotlib Line3D objects for each ball.
-        path_plots (list): List of Matplotlib Line3D path plots for each ball.
-        ball_configs (list): Configuration for each ball (e.g., color, size).
-
-    Returns:
-        list: Updated Line3D objects for animation.
+    We:
+    - Advance the simulation by one step.
+    - Record time and temperature.
+    - Update ball positions and paths in the 3D plot.
     """
     sim.update()
+    current_time = frame * sim.dt
+    times.append(current_time)
+    temperatures.append(sim.average_temperature)
 
-    # Print the average temperature and total energy for diagnostics
-    print(f"Frame {frame}: Average Temperature = {sim.average_temperature:.2f} K, Total Energy = {sim.total_energy:.2f}")
+    # Print diagnostics
+    print(
+        f"Frame {frame}: Time = {current_time:.2f} fs, Avg Temp = {sim.average_temperature:.2f} K, Total Energy = {sim.total_energy:.2f}")
 
+    # Update ball positions
     for i, ball in enumerate(sim.balls):
-        # Update ball position
         ball_plots[i].set_data([ball.position[0]], [ball.position[1]])
         ball_plots[i].set_3d_properties([ball.position[2]])
 
-        # Update paths with validation
+        # Update paths
         path_data = ball.get_path_segments()
         if path_data:
             latest_segment = path_data[-1]
-            if len(latest_segment["x"]) > 0:
+            if latest_segment["x"]:
                 path_plots[i].set_data(latest_segment["x"], latest_segment["y"])
                 path_plots[i].set_3d_properties(latest_segment["z"])
 
     return ball_plots + path_plots
 
-
-def visualize_simulation(sim, config):
+def visualize_simulation(sim, config, target_temperature):
     """
-    Visualize the simulation using Matplotlib animation.
+    Visualize the simulation using a 3D animation.
 
-    Args:
-        sim (Simulation): The simulation object to visualize.
-        config (dict): Configuration dictionary.
+    We:
+    - Run the simulation step-by-step via FuncAnimation.
+    - Record temperature and time data.
+    - After the figure closes, plot the temperature vs time.
     """
-    # Set up the animation plot
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     ax.set_xlim(-sim.well.radius, sim.well.radius)
@@ -132,7 +124,7 @@ def visualize_simulation(sim, config):
     ax.set_ylabel("Y (Å)")
     ax.set_zlabel("Z (Å)")
 
-    # Draw the well boundary as a cylinder
+    # Draw cylindrical well boundary
     theta = np.linspace(0, 2 * np.pi, 150)
     z = np.linspace(0, sim.well.height, 75)
     theta, z = np.meshgrid(theta, z)
@@ -140,86 +132,63 @@ def visualize_simulation(sim, config):
     y = sim.well.radius * np.sin(theta)
     ax.plot_wireframe(x, y, z, color="gray", alpha=0.3, linestyle="dotted", linewidth=0.5)
 
-    # Initialize ball and path plots
     ball_configs = config["balls"]
-    ball_plots = [
-        ax.plot([], [], [], 'o', color=ball["color"], markersize=ball["size"])[0] for ball in ball_configs
-    ]
-    path_plots = [
-        ax.plot([], [], [], color=ball["color"], linewidth=0.8)[0] for ball in ball_configs
-    ]
+    ball_plots = [ax.plot([], [], [], 'o', color=ball["color"], markersize=ball["size"])[0] for ball in ball_configs]
+    path_plots = [ax.plot([], [], [], color=ball["color"], linewidth=0.8)[0] for ball in ball_configs]
 
-    # Add a legend for ball types
-    unique_species = set([ball["species"] for ball in ball_configs])
+    # Create a legend for species
+    unique_species = set(ball["species"] for ball in ball_configs)
     for species in unique_species:
         ax.scatter([], [], [], label=f"Species: {species}", s=50)
     ax.legend(loc="upper right", title="Legend")
 
-    # Create the animation
+    # Prepare data storage for temperature vs time
+    times = []
+    temperatures = []
+    total_steps = int(sim.total_time / sim.dt)
+
+    # Create animation that runs the simulation step-by-step
     ani = animation.FuncAnimation(
         fig,
         update_animation,
-        frames=int(sim.total_time / sim.dt),
+        frames=total_steps,
         interval=sim.dt * 1000,
-        fargs=(sim, ball_plots, path_plots, ball_configs),
+        fargs=(sim, ball_plots, path_plots, ball_configs, times, temperatures),
+        blit=False,
+        repeat=False
     )
 
+    def on_close(event):
+        # After closing animation window, plot temperature vs time
+        plt.figure()
+        plt.plot(times, temperatures, label="Average Temperature", color="blue")
+        if target_temperature is not None:
+            plt.axhline(y=target_temperature, color="red", linestyle="--", label="Target Temperature")
+        plt.xlabel("Time (fs)")
+        plt.ylabel("Temperature (K)")
+        plt.title("Temperature vs Time")
+        plt.legend()
+        plt.grid(alpha=0.3)
+        plt.show()
+
+    fig.canvas.mpl_connect('close_event', on_close)
+
     plt.show()
-
-
-def plot_temperature_vs_time(sim, target_temperature=None):
-    """
-    Plots the temperature of the system as a function of time for diagnostics.
-
-    Args:
-        sim (Simulation): The simulation object.
-        target_temperature (float, optional): Target temperature for comparison.
-    """
-    temperatures = []
-    time_steps = []
-
-    current_time = 0.0
-    while current_time < sim.total_time:
-        sim.update()
-        temperatures.append(sim.average_temperature)
-        time_steps.append(current_time)
-        current_time += sim.dt
-
-    plt.figure()
-    plt.plot(time_steps, temperatures, label="Average Temperature", color="blue")
-    if target_temperature:
-        plt.axhline(y=target_temperature, color="red", linestyle="--", label="Target Temperature")
-    plt.xlabel("Time (fs)")
-    plt.ylabel("Temperature (K)")
-    plt.title("Temperature vs Time")
-    plt.legend()
-    plt.grid(alpha=0.3)
-    plt.show()
-
 
 def main():
-    """
-    Main function to demonstrate running and visualizing a simulation.
-    """
-    # Determine the simulation mode
-    mode = "newtonian"  # Change this to "monte_carlo" to test Monte Carlo simulation
-
-    # Load the configuration for the selected mode
+    mode = "newtonian"  # change to "monte_carlo" if desired
     config_path = "examples/config.json"
+
+    # Load configuration (do not change related lines)
     config = load_simulation_config(config_path, mode=mode)
 
-    # Set up the simulation
+    # Setup simulation
     sim = setup_simulation(config)
 
-    # Target temperature for rescaling (if needed)
     target_temperature = 300.0
 
-    # Plot diagnostics
-    plot_temperature_vs_time(sim, target_temperature=target_temperature)
-
-    # Visualize simulation
-    visualize_simulation(sim, config)
-
+    # Visualize simulation and record temperature
+    visualize_simulation(sim, config, target_temperature)
 
 if __name__ == "__main__":
     main()
