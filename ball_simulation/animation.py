@@ -119,26 +119,8 @@ class Ball:
         self.molecule_id = molecule_id  # Assign a molecule ID for intra/inter-molecular differentiation.
 
     def compute_repulsion_force(self, other, repulsion_constant=1.0):
-        """
-        Compute the repulsive force exerted by another ball.
-
-        Args:
-            other (Ball): The other ball in the simulation.
-            repulsion_constant (float): Constant controlling the strength of repulsion.
-
-        Returns:
-            np.array: The repulsive force vector acting on the ball.
-        """
-        displacement = self.position - other.position  # Vector from the other ball to this ball.
-        distance = np.linalg.norm(displacement)  # Compute the distance between the two balls.
-        if distance == 0 or distance > 5 * self.radius:  # Ignore if the balls are too far apart or overlapping.
-            return np.zeros(3)
-
-        # Cap the repulsion force to avoid excessive acceleration.
-        max_force = 10.0
-        force_magnitude = min(repulsion_constant / (distance ** 2), max_force)  # Inverse-square law for repulsion.
-        force_direction = displacement / distance  # Normalize the displacement vector to get direction.
-        return force_magnitude * force_direction  # Return the force vector.
+        # Remove this function entirely.
+        pass
 
     def compute_interaction_force(self, other, interaction_params, box_lengths):
         """
@@ -152,36 +134,38 @@ class Ball:
         Returns:
             np.array: Force vector in 3D space.
         """
-        # Get interaction parameters for the pair of particles
+        # Get interaction parameters
         pair_key = tuple(sorted([self.species, other.species]))
         params = interaction_params.get(pair_key, {"epsilon": 1.0, "sigma": 1.0, "cutoff": 2.5})
         epsilon, sigma, cutoff = params["epsilon"], params["sigma"], params["cutoff"]
 
-        # Calculate displacement and apply PBC for each dimension
+        # Apply PBC to compute adjusted distances
         delta = self.position - other.position
-        for i in range(3):  # Apply PBC along x, y, z dimensions
+        for i in range(3):
             if delta[i] > 0.5 * box_lengths[i]:
                 delta[i] -= box_lengths[i]
             elif delta[i] < -0.5 * box_lengths[i]:
                 delta[i] += box_lengths[i]
 
-        # Compute distance magnitude
-        r = np.linalg.norm(delta)
+        r = np.linalg.norm(delta)  # Distance magnitude
 
-        # Safeguard: If particles are too close or beyond cutoff, return zero force
-        r_min = 0.5 * sigma  # Minimum distance to avoid divergence (50% of sigma)
-        if r < r_min or r > cutoff:
+        # Safeguard: Return zero force if too close or beyond cutoff
+        r_min = 0.8 * sigma  # Allow closer distance (reduce divergence risk)
+        if r < r_min:
+            r = r_min  # Clamp distance to avoid blow-up
+        elif r > cutoff:
             return np.zeros(3)
 
         # Lennard-Jones force calculation
-        sr = sigma / r  # Scaled distance
+        sr = sigma / r
         sr6 = sr ** 6
         sr12 = sr6 ** 2
-        force_magnitude = 48 * epsilon * (sr12 / r - 0.5 * sr6 / r)
+        force_magnitude = 24 * epsilon * (2 * sr12 - sr6) / r
 
-        # Cap the maximum force to avoid numerical instability
-        max_force = 100.0
-        force_magnitude = min(force_magnitude, max_force)
+        # Ensure stability by limiting force magnitude
+        max_force = 50.0
+        if force_magnitude > max_force:
+            force_magnitude = max_force
 
         # Return force vector in the direction of delta
         return force_magnitude * (delta / r)
@@ -286,6 +270,7 @@ class Simulation:
         self.total_time = total_time  # Total simulation time.
         self.balls = []  # A list to hold all ball objects in the simulation.
         self.movement_type = movement_type  # Type of movement for the simulation: "newtonian" or "monte_carlo".
+        self.current_step = 0
 
         # Define interaction parameters for different species
         self.interaction_params = {
@@ -326,12 +311,17 @@ class Simulation:
         noise = np.random.uniform(-0.1, 0.1, size=3)  # Random noise in x, y, z directions.
         ball.force += noise
 
-    def update(self):
+    def update(self, rescale_temperature=True, target_temperature=300, rescale_interval=100):
         """
         Updates each ball's position, velocity, and handles boundary conditions.
+
+        Args:
+            rescale_temperature (bool): Flag to enable velocity rescaling.
+            target_temperature (float): Desired system temperature in Kelvin.
+            rescale_interval (int): Frequency (in steps) to apply velocity rescaling.
         """
         num_balls = len(self.balls)  # Get the total number of balls in the simulation.
-        box_lengths = (2 * self.well.radius, 2 * self.well.radius, self.well.height)  # Box dimensions
+        box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
 
         # Step 1: Reset forces for all balls
         for ball in self.balls:
@@ -346,53 +336,86 @@ class Simulation:
                 self.balls[i].force += interaction_force  # Add the interaction force to ball i.
                 self.balls[j].force -= interaction_force  # Apply equal and opposite force to ball j.
 
-                # Debug: Log interaction force and distance
-                distance = np.linalg.norm(self.balls[i].position - self.balls[j].position)
-                print(f"Interaction Force (Ball {i}-{j}): {interaction_force}, Distance: {distance}")
-
         # Step 3: Compute wall repulsion forces
         for ball_idx, ball in enumerate(self.balls):
             wall_repulsion_force = self.well.compute_wall_repulsion_force(ball)  # Calculate force from the wall.
             ball.force += wall_repulsion_force  # Add the wall repulsion force to the ball's total force.
-
-            # Debug: Log wall repulsion force
-            print(f"Wall Repulsion Force (Ball {ball_idx}): {wall_repulsion_force}")
 
         # Step 4: Update velocity and position for each ball
         for ball_idx, ball in enumerate(self.balls):
             # Apply Monte Carlo perturbation in forces if enabled
             if self.movement_type == "monte_carlo":
                 self.apply_monte_carlo_perturbation(ball)
-                print(f"Monte Carlo Perturbation (Ball {ball_idx}): {ball.force}")
 
             # Apply acceleration for Newtonian movement
             acceleration = ball.force / ball.mass  # Calculate acceleration using F = ma.
             ball.velocity += acceleration * self.dt  # Update velocity using v = u + at.
             ball.position += ball.velocity * self.dt  # Update position using x = x + vt.
 
-            # Debug: Log updated velocity and position
-            print(f"Updated Velocity (Ball {ball_idx}): {ball.velocity}")
-            print(f"Updated Position (Ball {ball_idx}): {ball.position}")
-
-            # Step 5: Apply periodic boundary conditions for all dimensions
-            for k in range(3):  # PBC in x, y, and z directions
-                if ball.position[k] > 0.5 * box_lengths[k]:
-                    ball.position[k] -= box_lengths[k]
-                elif ball.position[k] < -0.5 * box_lengths[k]:
-                    ball.position[k] += box_lengths[k]
+            # Step 5: Apply periodic boundary conditions (clean PBC fix)
+            ball.position = (ball.position + 0.5 * box_lengths) % box_lengths - 0.5 * box_lengths
 
             # Apply bounce for the cylindrical wall boundary
             ball.velocity = self.well.apply_bounce(ball)
 
-            # Handle PBC transition for path recording
-            if self.well.apply_pbc(ball.position)[1]:  # Check if PBC transition occurred
-                ball.skip_path_update = True  # Mark PBC transition
-            else:
-                ball.skip_path_update = False
-
             # Update path (skip wrapped positions)
             ball.update_path()
 
+        # Step 6: Apply velocity rescaling (thermostat)
+        if rescale_temperature and (self.current_step % rescale_interval == 0):
+            self.apply_velocity_rescaling(target_temperature)
+
+        self.current_step += 1  # Increment simulation step counter
+
+    def apply_velocity_rescaling(self, target_temperature):
+        """
+        Rescales velocities to maintain a target temperature.
+
+        Args:
+            target_temperature (float): Desired system temperature in Kelvin.
+        """
+        k_B = 0.0083144621  # Boltzmann constant in atomic units (amu * (angstrom/fs)^2 / K)
+
+        # Calculate the current temperature based on kinetic energy
+        total_kinetic_energy = 0.0
+        for ball in self.balls:
+            total_kinetic_energy += 0.5 * ball.mass * np.sum(ball.velocity ** 2)  # KE = 0.5 * m * v^2
+
+        num_particles = len(self.balls)
+        if num_particles == 0:  # Avoid division by zero
+            return
+
+        current_temperature = (2 / (3 * num_particles * k_B)) * total_kinetic_energy  # Temperature formula
+
+        # Avoid division by zero
+        if current_temperature == 0:
+            return
+
+        # Calculate the scaling factor for velocities
+        scaling_factor = np.sqrt(target_temperature / current_temperature)
+
+        # Apply the scaling factor to all velocities
+        for ball in self.balls:
+            ball.velocity *= scaling_factor
+
+    def compute_system_temperature(self):
+        """
+        Computes the current temperature of the system based on kinetic energy.
+
+        Returns:
+            float: The current system temperature in Kelvin.
+        """
+        k_B = 0.0083144621  # Boltzmann constant in atomic units
+        total_kinetic_energy = 0.0
+
+        for ball in self.balls:
+            total_kinetic_energy += 0.5 * ball.mass * np.sum(ball.velocity ** 2)
+
+        num_particles = len(self.balls)
+        if num_particles == 0:
+            return 0.0
+
+        return (2 / (3 * num_particles * k_B)) * total_kinetic_energy
 
     def finalize_simulation(self):
         """Finalizes the path for each ball at the end of the simulation."""
