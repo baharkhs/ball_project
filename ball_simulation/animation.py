@@ -1,570 +1,412 @@
 import numpy as np
 
+
 class Well:
-    def __init__(self, radius=5.0, height=10.0, cutoff_radius=None):
+    def __init__(self, radius=5.0, height=10.0):
         """
         Initializes the Well object representing a cylindrical space for particle movement.
 
         Args:
-            radius (float): Radius of the cylindrical well (in angstroms).
-            height (float): Height of the well (in angstroms).
-            cutoff_radius (float): Optional cutoff radius for smoothing forces (if not provided, defaults to radius).
-
-        The 'radius' and 'height' define the geometry of the confined area:
-        - The well extends from z=0 to z=height.
-        - The radial boundary in the x-y plane is given by radius.
-
-        If cutoff_radius is provided, it can be used to smoothly reduce forces near the boundary.
-        Otherwise, cutoff_radius defaults to the well radius.
+            radius (float): Radius of the well in angstroms (1e-10 meters).
+            height (float): Height of the well in angstroms.
         """
-        self.radius = radius
-        self.height = height
-        # If no cutoff is given, use the well radius. This will be used for smoothing force application near walls.
-        self.cutoff_radius = cutoff_radius if cutoff_radius else radius
-
-    def compute_wall_repulsion_force(self, ball, repulsion_constant=1.0):
-        """
-        Compute repulsion from the well boundaries.
-
-        Args:
-            ball (Ball): The ball object, which should have position and radius attributes.
-            repulsion_constant (float): Strength of the repulsion.
-
-        Returns:
-            np.array: A 3D force vector acting on the ball from the well boundaries.
-
-        Explanation:
-        - We consider repulsive forces from:
-          1. The cylindrical x–y boundary (radial direction).
-          2. The top and bottom walls (if the ball tries to go below z=0 or above z=height).
-        """
-        force = np.zeros(3)
-        distance_from_center = np.linalg.norm(ball.position[:2])
-
-        # Radial boundary
-        if distance_from_center + ball.radius > self.radius:
-            overlap = distance_from_center + ball.radius - self.radius
-            force[:2] = -overlap * (ball.position[:2] / distance_from_center)
-
-        # Bottom boundary
-        if ball.position[2] - ball.radius < 0:
-            overlap = ball.radius - ball.position[2]
-            force[2] += overlap
-
-        # Top boundary
-        elif ball.position[2] + ball.radius > self.height:
-            overlap = ball.position[2] + ball.radius - self.height
-            force[2] -= overlap
-
-        return force
+        self.radius = radius  # Radius of the cylindrical boundary
+        self.height = height  # Height of the well (z-axis boundary)
 
     def apply_pbc(self, position):
         """
-        Applies periodic boundary conditions (PBC) along the z-axis only.
+        Applies periodic boundary conditions (PBC) along the z-axis only, wrapping particles
+        between the top and bottom boundaries of the well.
 
         Args:
-            position (np.array): The current position [x, y, z] of the particle.
+            position (np.array): The current position of the particle.
 
         Returns:
-            tuple: (modified_position, wrapped)
-                modified_position: Position after applying PBC if needed.
-                wrapped (bool): True if a wrap occurred, False otherwise.
-
-        Explanation:
-        - If the particle goes above z=height, it reappears at z -= height.
-        - If it goes below z=0, it reappears at z += height.
-
-        Physically, this simulates a system that is "infinite" along z by wrapping around,
-        similar to imagining a particle leaving the top and entering from the bottom.
+            tuple: (modified position, whether PBC transition occurred)
         """
         wrapped = False
-        if position[2] > self.height:
-            position[2] -= self.height
+        # Handle PBC in the z-direction
+        if position[2] > self.height:  # If above the top boundary
+            position[2] -= self.height  # Wrap to the bottom
             wrapped = True
-        elif position[2] < 0:
-            position[2] += self.height
+        elif position[2] < 0:  # If below the bottom boundary
+            position[2] += self.height  # Wrap to the top
             wrapped = True
         return position, wrapped
 
     def apply_bounce(self, ball):
         """
-        Applies a rigid bounce if the particle reaches the x–y boundary.
+        Applies a rigid bounce if the particle reaches the x-y boundary, reversing its velocity component
+        perpendicular to the boundary.
 
         Args:
-            ball (Ball): The Ball object with attributes like position and velocity.
+            ball (Ball): The Ball object to check and adjust if it hits the boundary.
 
         Returns:
-            np.array: The updated velocity after a bounce if applied.
-
-        Explanation:
-        - This method checks if the ball is outside or exactly on the boundary in x–y plane.
-        - If it is, the velocity is reflected about the normal vector to the wall.
-        - This is a hard, instantaneous "bounce", which is non-physical because real walls would
-          apply a smoothly increasing repulsive force before the particle reaches the boundary.
-
-        While simple, this can cause numerical issues and unphysical behavior. It's here as a
-        fallback or a simple boundary condition. For more realism, rely on smooth repulsive forces.
+            np.array: Updated velocity of the ball after bounce, if applicable.
         """
+        # Calculate the distance from the center of the well to the ball's position in the x-y plane
         distance_from_center = np.linalg.norm(ball.position[:2])
-        # Check if the particle is at or beyond the radial boundary.
-        if distance_from_center >= self.radius:
+        if distance_from_center >= self.radius:  # Check if the ball is beyond or at the boundary
+            # Determine the normal direction for reflection
             normal_direction = ball.position[:2] / distance_from_center
-            # Reflect the velocity component normal to the wall:
-            # v_new = v_old - 2*(v_old·n)*n
+            # Reflect the velocity along the normal direction
             ball.velocity[:2] -= 2 * np.dot(ball.velocity[:2], normal_direction) * normal_direction
-            # Push the particle slightly inside to avoid it getting stuck exactly at boundary.
-            ball.position[:2] = normal_direction * (self.radius - 1e-10)
+            # Adjust position to ensure it stays inside the boundary
+            ball.position[:2] = normal_direction * (self.radius - 1e-10)  # Small epsilon to keep inside
         return ball.velocity
-
-    def smooth_cutoff_function(self, r, cutoff):
-        """
-        Computes a smooth scaling factor that tapers off as distance approaches the cutoff.
-
-        Args:
-            r (float): The current distance measure (e.g., distance from boundary or zero point).
-            cutoff (float): The cutoff distance at which the force goes to zero.
-
-        Returns:
-            float: A scaling factor in [0,1] that reduces the force to zero at r=cutoff.
-
-        Explanation:
-        - If r > cutoff, return 0: no force beyond that range.
-        - If r <= cutoff, use a polynomial decay: (1 - (r/cutoff)^2)^2.
-
-        Currently, this reduces force to zero at the cutoff. In some physical scenarios, you might
-        want the force to increase as you approach the wall. If so, you could invert the logic.
-        For now, we keep the code as is to maintain original features.
-        """
-        if r > cutoff:
-            return 0.0
-        # Smooth polynomial decay factor
-        return (1 - (r / cutoff) ** 2) ** 2
 
     def compute_wall_repulsion_force(self, ball, repulsion_constant=1.0):
         """
-        Computes a repulsive force from the well walls.
-
-        Args:
-            ball (Ball): The ball object, which should have position and radius attributes.
-            repulsion_constant (float): Strength of the repulsion.
-
-        Returns:
-            np.array: A 3D force vector acting on the ball from the well boundaries.
-
-        Explanation:
-        - We consider repulsive forces from:
-          1. The cylindrical x–y boundary (radial direction).
-          2. The top and bottom walls (if the ball tries to go below z=0 or above z=height).
-
-        - For the radial boundary:
-            We check how close the particle is to the boundary (distance_from_center to radius).
-            If the particle "overlaps" with the boundary (i.e., ball radius extends beyond the well radius),
-            we compute a repulsive force pushing it back inside.
-
-          overlap = ball.radius - (self.radius - distance_from_center)
-          If overlap > 0, the particle is beyond the allowed boundary. We push it back inward.
-          To keep original structure, we use the smooth_cutoff_function, but note that right now it
-          reduces force near cutoff. For a well, you might want it to be very large near the boundary.
-
-        - For the z-boundaries:
-            If ball.position[2] < ball.radius, it means the ball extends below the bottom of the well.
-            Similarly, if ball.position[2] > self.height - ball.radius, it extends above the top.
-            In both cases, we compute an overlap and push the ball back in.
-
-        - The repulsion_constant sets how strong the repulsion is.
-        - The smooth_factor scales the force down as we approach the cutoff radius.
-
-        NOTE:
-        If we are truly using PBC along z, having a top and bottom boundary is physically contradictory.
-        Either remove PBC and treat top/bottom similarly to the sides, or remove top/bottom forces if
-        you want an infinite cylinder. For now, we keep it to maintain original structure.
-        """
-        force = np.zeros(3)
-
-        # Compute radial distance in x-y plane
-        distance_from_center = np.linalg.norm(ball.position[:2])
-
-        # A small numerical safeguard in case distance_from_center is extremely close to zero:
-        if distance_from_center < 1e-14:
-            distance_from_center = 0.0
-
-        # Compute overlap for radial boundary
-        if distance_from_center > 0:
-            overlap = ball.radius - (self.radius - distance_from_center)
-        else:
-            # If the ball is exactly at center, consider no overlap unless ball.radius > self.radius
-            overlap = ball.radius - self.radius if ball.radius > self.radius else - (self.radius - ball.radius)
-
-        if overlap > 0:
-            normal_direction = ball.position[:2] / distance_from_center if distance_from_center > 0 else np.array([0.0, 0.0])
-            repulsion_magnitude = repulsion_constant * overlap
-            smooth_factor = self.smooth_cutoff_function(distance_from_center, self.cutoff_radius)
-            force[:2] = -repulsion_magnitude * smooth_factor * normal_direction
-
-        # Bottom wall
-        if ball.position[2] < ball.radius:
-            z_overlap = ball.radius - ball.position[2]
-            if z_overlap > 0:
-                smooth_factor_z = self.smooth_cutoff_function(ball.position[2], ball.radius)
-                force[2] += repulsion_constant * z_overlap * smooth_factor_z
-
-        # Top wall
-        elif ball.position[2] > self.height - ball.radius:
-            z_overlap = ball.radius - (self.height - ball.position[2])
-            if z_overlap > 0:
-                dist_from_top = self.height - ball.position[2]
-                smooth_factor_z = self.smooth_cutoff_function(dist_from_top, ball.radius)
-                force[2] -= repulsion_constant * z_overlap * smooth_factor_z
-
-        return force
-
-    def compute_total_wall_force(self, ball, repulsion_constant=1.0):
-        """
-        Computes the total force from the well boundaries on the ball.
+        Computes a repulsive force between a ball and the well walls (x-y boundary and z boundary).
 
         Args:
             ball (Ball): The ball object.
             repulsion_constant (float): Strength of the repulsion force.
 
         Returns:
-            np.array: Total wall force acting on the ball.
-
-        Explanation:
-        - Currently, this just calls compute_wall_repulsion_force.
-        - This method can be extended if you want to add additional effects, such as friction or
-          other boundary interactions.
+            np.array: The repulsion force vector acting on the ball.
         """
-        repulsion_force = self.compute_wall_repulsion_force(ball, repulsion_constant)
-        return repulsion_force
+        force = np.zeros(3)
+
+        # Compute repulsion from the cylindrical x-y boundary
+        distance_from_center = np.linalg.norm(ball.position[:2])
+        if distance_from_center >= self.radius - ball.radius:  # Check if near or beyond the boundary
+            overlap = ball.radius - (self.radius - distance_from_center)  # Penetration depth
+            if overlap > 0:
+                # Compute the normal vector and apply repulsion
+                normal_direction = ball.position[:2] / distance_from_center
+                repulsion_magnitude = repulsion_constant * overlap
+                force[:2] = -repulsion_magnitude * normal_direction  # Push inward
+
+        # Compute repulsion from the bottom z boundary
+        if ball.position[2] < ball.radius:  # Near the bottom wall
+            overlap = ball.radius - ball.position[2]
+            if overlap > 0:
+                force[2] += repulsion_constant * overlap  # Push upward
+
+        # Compute repulsion from the top z boundary
+        elif ball.position[2] > self.height - ball.radius:  # Near the top wall
+            overlap = ball.radius - (self.height - ball.position[2])
+            if overlap > 0:
+                force[2] -= repulsion_constant * overlap  # Push downward
+
+        return force
 
 
 class Ball:
-    def __init__(self, position, velocity, mass, radius, species="unknown", attraction_coeff=0.0, repulsion_coeff=0.0):
+    def __init__(self, mass=18.0, initial_position=None, initial_velocity=None, species="O", molecule_id=None):
         """
-        Initialize a Ball object.
+        Represents a single particle with mass, position, velocity, and temperature attributes.
 
         Args:
-            position (array-like): Initial position of the ball [x, y, z].
-            velocity (array-like): Initial velocity of the ball [vx, vy, vz].
-            mass (float): Mass of the ball.
-            radius (float): Radius of the ball.
-            species (str): Species of the ball (e.g., "H", "O").
-            attraction_coeff (float): Coefficient for attraction forces.
-            repulsion_coeff (float): Coefficient for repulsion forces.
+            mass (float): Mass of the particle in atomic mass units (amu).
+            initial_position (array-like): Initial [x, y, z] position in angstroms.
+            initial_velocity (array-like): Initial [vx, vy, vz] velocity in angstroms per femtosecond (fs).
         """
-        self.position = np.array(position, dtype=float)
-        self.velocity = np.array(velocity, dtype=float)
-        self.mass = mass
-        self.radius = radius
-        self.species = species
-        self.attraction_coeff = attraction_coeff
-        self.repulsion_coeff = repulsion_coeff
+        self.mass = mass  # Mass in atomic mass units (amu).
+        self.position = np.array(initial_position) if initial_position is not None else np.array([0.0, 0.0, 0.0])
+        self.velocity = np.array(initial_velocity, dtype=float) if initial_velocity is not None else np.array(
+            [0.0, 0.0, 0.0])
+        self.initial_velocity = self.velocity.copy()  # Store the initial velocity for reference or reuse.
+        self.path_segments = []  # Stores completed path segments for visualization.
+        self.current_path_segment = {"x": [], "y": [], "z": []}  # Tracks the ongoing path segment.
+        self.skip_path_update = False  # Flag to indicate if path updates should be skipped (e.g., during PBC transitions).
+        self.temperature = self.calculate_temperature()  # Calculate the initial temperature of the ball.
+        self.force = np.zeros(3)  # Initialize the force acting on the ball to zero.
+        self.radius = 0.1  # Radius of the ball, used for collision detection or wall interactions.
+        self.species = species  # Type of particle ("H", "O")
+        self.molecule_id = molecule_id  # Assign a molecule ID for intra/inter-molecular differentiation.
 
-        self.force = np.zeros(3)
-        self.path_segments = []
-        self.current_path_segment = {"x": [], "y": [], "z": []}
-
-    def compute_force(self, other_balls):
+    def compute_repulsion_force(self, other, repulsion_constant=1.0):
         """
-        Compute the net force on this ball due to attraction and repulsion from other balls.
+        Compute the repulsive force exerted by another ball.
 
         Args:
-            other_balls (list): List of other Ball objects.
+            other (Ball): The other ball in the simulation.
+            repulsion_constant (float): Constant controlling the strength of repulsion.
+
+        Returns:
+            np.array: The repulsive force vector acting on the ball.
         """
-        self.force[:] = 0.0  # Reset force
+        displacement = self.position - other.position  # Vector from the other ball to this ball.
+        distance = np.linalg.norm(displacement)  # Compute the distance between the two balls.
+        if distance == 0 or distance > 5 * self.radius:  # Ignore if the balls are too far apart or overlapping.
+            return np.zeros(3)
 
-        for other in other_balls:
-            if other is self:
-                continue
+        # Cap the repulsion force to avoid excessive acceleration.
+        max_force = 10.0
+        force_magnitude = min(repulsion_constant / (distance ** 2), max_force)  # Inverse-square law for repulsion.
+        force_direction = displacement / distance  # Normalize the displacement vector to get direction.
+        return force_magnitude * force_direction  # Return the force vector.
 
-            r_vec = other.position - self.position
-            r_mag = np.linalg.norm(r_vec)
-
-            if r_mag == 0:
-                continue  # Avoid singularity
-
-            r_hat = r_vec / r_mag
-
-            # Attraction force: F_attr = -k_a * r_hat
-            F_attr = -self.attraction_coeff * r_hat
-
-            # Repulsion force: F_rep = k_r / r_mag^2 * r_hat
-            F_rep = (self.repulsion_coeff / r_mag ** 2) * r_hat
-
-            self.force += F_attr + F_rep
-
-    def compute_interaction_force(self, other, interaction_params):
+    def compute_interaction_force(self, other, interaction_params, box_lengths):
         """
-        Compute the interaction force between this ball and another ball using Lennard-Jones potential.
+        Compute the Lennard-Jones force between this ball and another, with PBC.
 
         Args:
             other (Ball): Another ball to calculate the force against.
             interaction_params (dict): Interaction parameters containing epsilon, sigma, and cutoff.
+            box_lengths (tuple): Box lengths (x_length, y_length, z_length) for PBC.
 
         Returns:
-            np.array: Force vector in 3D space acting on this ball due to the other ball.
+            np.array: Force vector in 3D space.
         """
-        # Extract parameters for interaction
+        # Get interaction parameters for the pair of particles
         pair_key = tuple(sorted([self.species, other.species]))
-        params = interaction_params.get(pair_key, None)
+        params = interaction_params.get(pair_key, {"epsilon": 1.0, "sigma": 1.0, "cutoff": 2.5})
+        epsilon, sigma, cutoff = params["epsilon"], params["sigma"], params["cutoff"]
 
-        if params is None:
-            raise ValueError(f"Interaction parameters for species pair {pair_key} are missing.")
+        # Calculate displacement and apply PBC for each dimension
+        delta = self.position - other.position
+        for i in range(3):  # Apply PBC along x, y, z dimensions
+            if delta[i] > 0.5 * box_lengths[i]:
+                delta[i] -= box_lengths[i]
+            elif delta[i] < -0.5 * box_lengths[i]:
+                delta[i] += box_lengths[i]
 
-        sigma = params.get("sigma", 1.0)
-        epsilon = params.get("epsilon", 1.0)
-        cutoff = params.get("cutoff", 5.0)
+        # Compute distance magnitude
+        r = np.linalg.norm(delta)
 
-        # Compute distance vector and magnitude
-        r_vec = self.position - other.position
-        r_mag = np.linalg.norm(r_vec)
-
-        if r_mag == 0 or r_mag > cutoff:
-            # No force if distance is zero (avoid singularity) or beyond cutoff
+        # Safeguard: If particles are too close or beyond cutoff, return zero force
+        r_min = 0.5 * sigma  # Minimum distance to avoid divergence (50% of sigma)
+        if r < r_min or r > cutoff:
             return np.zeros(3)
 
-        # Unit vector in the direction of the force
-        r_hat = r_vec / r_mag
-
-        # Lennard-Jones force magnitude
-        sr = sigma / r_mag
+        # Lennard-Jones force calculation
+        sr = sigma / r  # Scaled distance
         sr6 = sr ** 6
         sr12 = sr6 ** 2
-        force_magnitude = 48 * epsilon * ((sr12 / r_mag) - 0.5 * (sr6 / r_mag))
+        force_magnitude = 48 * epsilon * (sr12 / r - 0.5 * sr6 / r)
 
-        # Force vector
-        return force_magnitude * r_hat
+        # Cap the maximum force to avoid numerical instability
+        max_force = 100.0
+        force_magnitude = min(force_magnitude, max_force)
+
+        # Return force vector in the direction of delta
+        return force_magnitude * (delta / r)
 
     def calculate_kinetic_energy(self):
         """
-        Calculate the kinetic energy of the ball.
-
-        Formula:
-        KE = 0.5 * mass * |velocity|^2
+        Calculates and returns the kinetic energy (KE) of the ball.
 
         Returns:
-            float: Kinetic energy in units of amu*(Å/fs)^2.
+            float: Kinetic energy in atomic units (amu * (angstrom/fs)^2).
         """
-        return 0.5 * self.mass * np.dot(self.velocity, self.velocity)
+        return 0.5 * self.mass * np.dot(self.velocity, self.velocity)  # KE = 0.5 * m * v^2.
 
-    def update_position(self, dt):
+    def calculate_temperature(self):
         """
-        Update the position and velocity of the ball using Newton's second law.
+        Calculates the temperature of the ball based on its kinetic energy.
+
+        Returns:
+            float: Temperature in Kelvin (K).
+        """
+        k_B = 0.0083144621  # Boltzmann constant in atomic units (amu * (angstrom/fs)^2 / K).
+        kinetic_energy = self.calculate_kinetic_energy()  # Compute kinetic energy.
+        return (2 / 3) * (kinetic_energy / k_B)  # Relate KE to temperature (classical thermodynamics).
+
+    def apply_forces(self):
+        """
+        Placeholder for applying external forces (e.g., gravity) to the ball.
+        """
+        # Extend this method in the future to include external forces (e.g., gravity or electric fields).
+        pass
+
+    def update_velocity_position(self, dt):
+        """
+        Updates the velocity and position of the ball based on the time step.
 
         Args:
-            dt (float): Time step for the update.
+            dt (float): Time step in femtoseconds.
         """
-        acceleration = self.force / self.mass
-        self.velocity += acceleration * dt
+        # Update the position using velocity (Newtonian motion: x = x + v * dt).
         self.position += self.velocity * dt
 
-    def update_path(self, finalize=False):
-        """
-        Update the particle's path by recording its current position or finalize the current segment.
 
-        Args:
-            finalize (bool): If True, finalize the current path segment and start a new one.
+
+    def update_path(self):
         """
-        if finalize:
+        Records the ball's position for path visualization. Handles PBC transitions
+        and avoids adding positions exactly at PBC boundaries to the path.
+        """
+        if self.skip_path_update:
+            # If a PBC transition occurred, finalize the current segment and start a new one.
             if self.current_path_segment["x"]:
                 self.path_segments.append(self.current_path_segment)
-            self.current_path_segment = {"x": [], "y": [], "z": []}  # Start a new segment
+            self.current_path_segment = {"x": [], "y": [], "z": []}
+            self.skip_path_update = False  # Reset the flag for future updates.
         else:
+            # Skip recording the path if the ball is exactly at the PBC boundary.
+            if self.position[2] == 0 or self.position[2] == self.radius:
+                return
+
+            # Otherwise, update the ongoing path segment.
             self.current_path_segment["x"].append(self.position[0])
             self.current_path_segment["y"].append(self.position[1])
             self.current_path_segment["z"].append(self.position[2])
 
-    def get_all_paths(self):
+    def finalize_path(self):
         """
-        Return all recorded path segments for visualization, including the current segment.
+        Finalizes and stores the current path segment at the end of the simulation.
+        """
+        if self.current_path_segment["x"]:  # Check if the current path segment contains data.
+            self.path_segments.append(self.current_path_segment)  # Store the segment.
+
+    def get_path_segments(self):
+        """
+        Returns all path segments for visualization.
 
         Returns:
-            list: A list of all path segments, finalized and ongoing.
+            list: A list of all recorded path segments, including the current one.
         """
-        return self.path_segments + [self.current_path_segment] if self.current_path_segment["x"] else self.path_segments
+        return self.path_segments + [self.current_path_segment]  # Include the current segment.
+
+    def finalize_simulation(self):
+        """
+        Finalizes the path for the ball at the end of the simulation.
+        """
+        self.finalize_path()  # Ensure the current path segment is stored.
 
 
 class Simulation:
-    def __init__(self, well_radius=0.5, well_height=1.0, total_time=10.0, dt=0.01, movement_type="newtonian"):
-
+    def __init__(self, well_radius=0.5, well_height=1.0, total_time=10.0, dt=0.001, movement_type="newtonian"):
         """
-        Initializes the simulation environment, including the container (well), time parameters, and movement type.
+        Initializes the simulation environment, parameters, and balls.
 
         Args:
-            well_radius (float): Radius of the cylindrical well in Å.
-            well_height (float): Height of the well in Å.
-            total_time (float): Total simulation time in fs.
-            dt (float): Time step in fs.
-            movement_type (str): "newtonian" (deterministic) or "monte_carlo" (stochastic) particle dynamics.
-
-        Scientific Details:
-        - Positions are in Å, velocities in Å/fs, time in fs, and mass in amu.
-        - Forces are computed in amu·Å/fs², energies in amu·(Å/fs)².
-        - Temperature is in Kelvin (K).
-
-        The `movement_type` influences position updates:
-        - "newtonian": Classical equations of motion (F = ma).
-        - "monte_carlo": Random steps and stochastic forces.
+            well_radius (float): Radius of the cylindrical well in angstroms.
+            well_height (float): Height of the well in angstroms.
+            total_time (float): Total simulation time in femtoseconds.
+            dt (float): Time step in femtoseconds.
+            movement_type (str): Movement type for particles; "newtonian" or "monte_carlo".
         """
-        self.well = Well(radius=well_radius, height=well_height)
-        self.well_radius = well_radius
-        self.well_height = well_height
-        self.dt = dt
-        self.total_time = total_time
-        self.movement_type = movement_type
-        self.balls = []  # List of Ball objects
+        self.well = Well(well_radius, well_height)  # Initialize the cylindrical well.
+        self.dt = dt  # Time step for each simulation iteration.
+        self.total_time = total_time  # Total simulation time.
+        self.balls = []  # A list to hold all ball objects in the simulation.
+        self.movement_type = movement_type  # Type of movement for the simulation: "newtonian" or "monte_carlo".
+
+        # Define interaction parameters for different species
         self.interaction_params = {
-            ("O", "O"): {"epsilon": 0.5, "sigma": 0.3, "cutoff": 5.0},
-            ("H", "O"): {"epsilon": 0.3, "sigma": 0.25, "cutoff": 4.0},
-            ("H", "H"): {"epsilon": 0.2, "sigma": 0.2, "cutoff": 3.0},
-        }
-        self.thermostat_method = None
+                ("H", "H"): {"epsilon": 1.0, "sigma": 0.1, "cutoff": 2.5},
+                ("O", "O"): {"epsilon": 2.0, "sigma": 0.2, "cutoff": 5.0},
+                ("H", "O"): {"epsilon": 1.5, "sigma": 0.15, "cutoff": 4.0},
+                #("N", "N"): {"epsilon": 1.8, "sigma": 0.12, "cutoff": 3.5},
+                #("H", "N"): {"epsilon": 1.2, "sigma": 0.11, "cutoff": 3.0},
+                #("O", "N"): {"epsilon": 1.6, "sigma": 0.14, "cutoff": 4.5}
+            }
 
     def set_movement_type(self, movement_type="newtonian"):
-        """
-        Sets the movement type for the simulation.
-
-        Args:
-            movement_type (str): "newtonian" or "monte_carlo".
-        """
+        """Sets the movement type for all balls in the simulation."""
         self.movement_type = movement_type
 
-    def add_ball(self, ball):
+    def add_ball(self, mass=1.0, initial_position=None, initial_velocity=None, species="O", molecule_id=None):
         """
-        Add a ball to the simulation.
+        Adds a ball to the simulation with the specified properties.
 
         Args:
-            ball (Ball): A Ball object to be added.
+            mass (float): Mass of the particle.
+            initial_position (array-like): Initial position of the particle.
+            initial_velocity (array-like): Initial velocity of the particle.
+            species (str): Type of particle (e.g., "H" for hydrogen, "O" for oxygen).
+            molecule_id (int): Molecule identifier for intra/inter-molecular interaction.
         """
+        ball = Ball(mass=mass, initial_position=initial_position, initial_velocity=initial_velocity,
+                    species=species, molecule_id=molecule_id)
         self.balls.append(ball)
 
-    def apply_thermostat(self, target_temperature, method="nose_hoover", gamma=1.0):
+    def apply_monte_carlo_perturbation(self, ball):
         """
-        Apply a thermostat to regulate the system's temperature.
+        Applies random noise to the force of a ball, simulating stochastic Monte Carlo behavior.
 
         Args:
-            target_temperature (float): Desired temperature in Kelvin.
-            method (str): "nose_hoover" or "langevin".
-            gamma (float): Friction coefficient for Langevin thermostat.
-
-        Scientific Details:
-        - Nose-Hoover: Enforces canonical ensemble by controlling kinetic energy fluctuations.
-        - Langevin: Adds stochastic and frictional forces to mimic heat bath interactions.
+            ball (Ball): Ball to perturb.
         """
-        current_temperature = self.calculate_average_temperature()
-        scaling_factor = np.sqrt(target_temperature / current_temperature)
-
-        if method == "nose_hoover":
-            for ball in self.balls:
-                ball.velocity *= scaling_factor
-
-        elif method == "langevin":
-            for ball in self.balls:
-                random_force = np.random.normal(0, np.sqrt(gamma * target_temperature), size=3)
-                ball.force += random_force
+        noise = np.random.uniform(-0.1, 0.1, size=3)  # Random noise in x, y, z directions.
+        ball.force += noise
 
     def update(self):
         """
-        Perform a single simulation step:
-        1. Reset forces.
-        2. Compute interaction forces.
-        3. Apply wall forces.
-        4. Update positions and velocities.
-        5. Apply boundary conditions.
-        6. Compute temperature and energy.
-
-        Scientific Details:
-        - Forces include Lennard-Jones interactions and wall repulsions.
-        - Positions are updated using Newtonian mechanics.
+        Updates each ball's position, velocity, and handles boundary conditions.
         """
-        self._reset_forces()
-        self._compute_pairwise_forces()
-        self._apply_wall_forces()
-        self._update_positions_and_velocities()
-        self._apply_boundary_conditions()
+        num_balls = len(self.balls)  # Get the total number of balls in the simulation.
+        box_lengths = (2 * self.well.radius, 2 * self.well.radius, self.well.height)  # Box dimensions
 
-    def _reset_forces(self):
-        """Reset forces on all balls."""
+        # Step 1: Reset forces for all balls
         for ball in self.balls:
-            ball.force = np.zeros(3)
+            ball.force = np.zeros(3)  # Reset the force vector for each ball to zero.
 
-    def _compute_pairwise_forces(self):
-        """
-        Compute Lennard-Jones interaction forces between balls.
-
-        Scientific Equation:
-        F(r) = 48 * epsilon * [ (sigma^12 / r^13) - 0.5 * (sigma^6 / r^7) ] * r̂
-        """
-        num_balls = len(self.balls)
+        # Step 2: Compute pairwise interaction forces between balls with PBC
         for i in range(num_balls):
-            for j in range(i + 1, num_balls):
-                force = self.balls[i].compute_interaction_force(self.balls[j], self.interaction_params)
-                self.balls[i].force += force
-                self.balls[j].force -= force
+            for j in range(i + 1, num_balls):  # Avoid double-calculating forces.
+                interaction_force = self.balls[i].compute_interaction_force(
+                    self.balls[j], self.interaction_params, box_lengths
+                )
+                self.balls[i].force += interaction_force  # Add the interaction force to ball i.
+                self.balls[j].force -= interaction_force  # Apply equal and opposite force to ball j.
 
-    def _apply_wall_forces(self):
-        """
-        Compute repulsive forces from the simulation boundaries.
+                # Debug: Log interaction force and distance
+                distance = np.linalg.norm(self.balls[i].position - self.balls[j].position)
+                print(f"Interaction Force (Ball {i}-{j}): {interaction_force}, Distance: {distance}")
 
-        Scientific Details:
-        - Walls exert repulsive forces based on particle overlap.
-        """
+        # Step 3: Compute wall repulsion forces
+        for ball_idx, ball in enumerate(self.balls):
+            wall_repulsion_force = self.well.compute_wall_repulsion_force(ball)  # Calculate force from the wall.
+            ball.force += wall_repulsion_force  # Add the wall repulsion force to the ball's total force.
+
+            # Debug: Log wall repulsion force
+            print(f"Wall Repulsion Force (Ball {ball_idx}): {wall_repulsion_force}")
+
+        # Step 4: Update velocity and position for each ball
+        for ball_idx, ball in enumerate(self.balls):
+            # Apply Monte Carlo perturbation in forces if enabled
+            if self.movement_type == "monte_carlo":
+                self.apply_monte_carlo_perturbation(ball)
+                print(f"Monte Carlo Perturbation (Ball {ball_idx}): {ball.force}")
+
+            # Apply acceleration for Newtonian movement
+            acceleration = ball.force / ball.mass  # Calculate acceleration using F = ma.
+            ball.velocity += acceleration * self.dt  # Update velocity using v = u + at.
+            ball.position += ball.velocity * self.dt  # Update position using x = x + vt.
+
+            # Debug: Log updated velocity and position
+            print(f"Updated Velocity (Ball {ball_idx}): {ball.velocity}")
+            print(f"Updated Position (Ball {ball_idx}): {ball.position}")
+
+            # Step 5: Apply periodic boundary conditions for all dimensions
+            for k in range(3):  # PBC in x, y, and z directions
+                if ball.position[k] > 0.5 * box_lengths[k]:
+                    ball.position[k] -= box_lengths[k]
+                elif ball.position[k] < -0.5 * box_lengths[k]:
+                    ball.position[k] += box_lengths[k]
+
+            # Apply bounce for the cylindrical wall boundary
+            ball.velocity = self.well.apply_bounce(ball)
+
+            # Handle PBC transition for path recording
+            if self.well.apply_pbc(ball.position)[1]:  # Check if PBC transition occurred
+                ball.skip_path_update = True  # Mark PBC transition
+            else:
+                ball.skip_path_update = False
+
+            # Update path (skip wrapped positions)
+            ball.update_path()
+
+
+    def finalize_simulation(self):
+        """Finalizes the path for each ball at the end of the simulation."""
         for ball in self.balls:
-            wall_force = self.well.compute_wall_repulsion_force(ball)
-            ball.force += wall_force
+            ball.finalize_path()
 
-
-
-    def _update_positions_and_velocities(self):
+    def run(self):
         """
-        Update the positions and velocities of all balls.
-
-        Newtonian Mechanics:
-        x(t+dt) = x(t) + v(t)*dt + 0.5*a(t)*dt^2
-        v(t+dt) = v(t) + a(t)*dt
-        """
-        for ball in self.balls:
-            ball.update_position(self.dt)
-
-    def _apply_boundary_conditions(self):
-        """Apply periodic or bounce boundary conditions to all balls."""
-        for ball in self.balls:
-            ball.apply_periodic_boundary_conditions(self.well_radius)
-
-    def calculate_average_temperature(self):
-        """
-        Compute the average temperature of the system.
-
-        Scientific Equation:
-        T = (2/3) * (KE / k_B)
-        """
-        if not self.balls:
-            return 0.0
-        total_ke = sum(ball.calculate_kinetic_energy() for ball in self.balls)
-        return (2.0 / 3.0) * (total_ke / (len(self.balls) * 8.31e-7))
-
-    def calculate_total_energy(self):
-        """
-        Compute the total energy (kinetic + potential) of the system.
-        """
-        total_ke = sum(ball.calculate_kinetic_energy() for ball in self.balls)
-        total_pe = 0.0
-        for i in range(len(self.balls)):
-            for j in range(i + 1, len(self.balls)):
-                total_pe += self.balls[i].calculate_potential_energy(self.balls[j], self.interaction_params)
-        return total_ke + total_pe
-
-    def run(self, target_temperature=None, thermostat_method=None):
-        """
-        Run the simulation from t=0 to t=total_time.
-
-        Args:
-            target_temperature (float): Target temperature for thermostat.
-            thermostat_method (str): "nose_hoover" or "langevin".
+        Executes the simulation loop.
         """
         current_time = 0.0
         while current_time < self.total_time:
-            self.update()
-            if target_temperature and thermostat_method:
-                self.apply_thermostat(target_temperature, method=thermostat_method)
-            current_time += self.dt
+            self.update()  # Update all ball positions, velocities, and forces.
+            current_time += self.dt  # Increment the current time by the time step.
+
+        # Finalize the simulation by processing results.
+        self.finalize_simulation()

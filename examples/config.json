@@ -1,147 +1,55 @@
 {
   "newtonian": {
     "well": {
-      "radius": 1.0,
+      "radius": 0.6,
       "height": 2.0
     },
     "simulation": {
-      "total_time": 20.0,
-      "dt": 0.01,
+      "total_time": 15.0,
+      "dt": 0.02,
       "movement_type": "newtonian"
     },
     "balls": [
       {
-        "mass": 16.0,
-        "initial_position": [0.0, 0.0, 0.5],
-        "initial_velocity": [0.1, 0.1, 0.0],
-        "radius": 0.2,
+        "mass": 2.0,
+        "initial_position": [0.1, 0.1, 0.1],
+        "initial_velocity": [3.0, -3.0, 0.1],
         "color": "red",
-        "size": 12,
-        "species": "O",
-        "molecule_id": 1
+        "size": 10
       },
       {
-        "mass": 1.0,
-        "initial_position": [0.3, 0.3, 0.5],
-        "initial_velocity": [0.2, -0.1, 0.0],
-        "radius": 0.1,
+        "mass": 1.2,
+        "initial_position": [-0.2, 0.2, 0.1],
+        "initial_velocity": [-1.0, 0.5, 0.1],
         "color": "blue",
-        "size": 6,
-        "species": "H",
-        "molecule_id": 1
-      },
-      {
-        "mass": 1.0,
-        "initial_position": [-0.3, 0.3, 0.5],
-        "initial_velocity": [-0.2, 0.2, 0.0],
-        "radius": 0.1,
-        "color": "blue",
-        "size": 6,
-        "species": "H",
-        "molecule_id": 1
-      },
-      {
-        "mass": 16.0,
-        "initial_position": [0.5, 0.5, 1.0],
-        "initial_velocity": [-0.1, 0.0, -0.1],
-        "radius": 0.2,
-        "color": "red",
-        "size": 12,
-        "species": "O",
-        "molecule_id": 2
-      },
-      {
-        "mass": 1.0,
-        "initial_position": [0.8, 0.8, 1.0],
-        "initial_velocity": [0.0, -0.2, 0.1],
-        "radius": 0.1,
-        "color": "blue",
-        "size": 6,
-        "species": "H",
-        "molecule_id": 2
-      },
-      {
-        "mass": 1.0,
-        "initial_position": [0.2, 0.8, 1.0],
-        "initial_velocity": [0.2, 0.1, 0.0],
-        "radius": 0.1,
-        "color": "blue",
-        "size": 6,
-        "species": "H",
-        "molecule_id": 2
+        "size": 7
       }
     ]
   },
   "monte_carlo": {
     "well": {
-      "radius": 1.0,
+      "radius": 0.6,
       "height": 2.0
     },
     "simulation": {
-      "total_time": 50.0,
+      "total_time": 15.0,
       "dt": 0.02,
       "movement_type": "monte_carlo"
     },
     "balls": [
       {
-        "mass": 16.0,
-        "initial_position": [0.0, 0.0, 0.5],
+        "mass": 2.0,
+        "initial_position": [0.1, 0.1, 0.1],
         "initial_velocity": [0.0, 0.0, 0.0],
-        "radius": 0.2,
-        "color": "red",
-        "size": 12,
-        "species": "O",
-        "molecule_id": 1
+        "color": "green",
+        "size": 10
       },
       {
-        "mass": 1.0,
-        "initial_position": [0.3, 0.3, 0.5],
+        "mass": 1.2,
+        "initial_position": [-0.2, 0.2, 0.1],
         "initial_velocity": [0.0, 0.0, 0.0],
-        "radius": 0.1,
-        "color": "blue",
-        "size": 6,
-        "species": "H",
-        "molecule_id": 1
-      },
-      {
-        "mass": 1.0,
-        "initial_position": [-0.3, 0.3, 0.5],
-        "initial_velocity": [0.0, 0.0, 0.0],
-        "radius": 0.1,
-        "color": "blue",
-        "size": 6,
-        "species": "H",
-        "molecule_id": 1
-      },
-      {
-        "mass": 16.0,
-        "initial_position": [0.5, 0.5, 1.0],
-        "initial_velocity": [0.0, 0.0, 0.0],
-        "radius": 0.2,
-        "color": "red",
-        "size": 12,
-        "species": "O",
-        "molecule_id": 2
-      },
-      {
-        "mass": 1.0,
-        "initial_position": [0.8, 0.8, 1.0],
-        "initial_velocity": [0.0, 0.0, 0.0],
-        "radius": 0.1,
-        "color": "blue",
-        "size": 6,
-        "species": "H",
-        "molecule_id": 2
-      },
-      {
-        "mass": 1.0,
-        "initial_position": [0.2, 0.8, 1.0],
-        "initial_velocity": [0.0, 0.0, 0.0],
-        "radius": 0.1,
-        "color": "blue",
-        "size": 6,
-        "species": "H",
-        "molecule_id": 2
+        "color": "orange",
+        "size": 7
       }
     ]
   }
