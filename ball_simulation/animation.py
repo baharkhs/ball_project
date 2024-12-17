@@ -321,18 +321,20 @@ class Simulation:
         angle_deg = 104.5  # Bond angle in degrees
         angle_rad = np.radians(angle_deg)
 
-        # Oxygen atom at the center
+        # Oxygen atom at the center (Red, Larger Size)
         self.add_ball(
-            mass=16.0,  # Oxygen mass
+            mass=16.0,
             initial_position=np.array(center_position),
             initial_velocity=np.array(velocity),
             species="O",
             molecule_id=molecule_id
         )
+        self.balls[-1].color = "red"
+        self.balls[-1].size = 10  # Large size for Oxygen
 
-        # Hydrogen atoms
-        offset1 = np.array([bond_length * np.sin(angle_rad / 2), bond_length * np.cos(angle_rad / 2), 0])
-        offset2 = np.array([-bond_length * np.sin(angle_rad / 2), bond_length * np.cos(angle_rad / 2), 0])
+        # Calculate offsets for hydrogen atoms (Blue, Smaller Size) with Z-component
+        offset1 = np.array([bond_length * np.sin(angle_rad / 2), bond_length * np.cos(angle_rad / 2), 0.1])
+        offset2 = np.array([-bond_length * np.sin(angle_rad / 2), bond_length * np.cos(angle_rad / 2), -0.1])
 
         self.add_ball(
             mass=1.0,
@@ -341,6 +343,9 @@ class Simulation:
             species="H",
             molecule_id=molecule_id
         )
+        self.balls[-1].color = "blue"
+        self.balls[-1].size = 6  # Small size for Hydrogen
+
         self.add_ball(
             mass=1.0,
             initial_position=np.array(center_position) + offset2,
@@ -348,6 +353,8 @@ class Simulation:
             species="H",
             molecule_id=molecule_id
         )
+        self.balls[-1].color = "blue"
+        self.balls[-1].size = 6  # Small size for Hydrogen
 
     def apply_monte_carlo_perturbation(self, ball, k_B=0.0083144621, temperature=300):
         """

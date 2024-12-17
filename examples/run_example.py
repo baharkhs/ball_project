@@ -57,32 +57,20 @@ def setup_simulation(config):
     sim = Simulation(well_radius=well_radius, well_height=well_height, total_time=total_time, dt=dt)
     sim.set_movement_type(movement_type)
 
-    # Add balls to the simulation
-    for ball_config in config["balls"]:
-        sim.add_ball(
-            mass=ball_config["mass"],
-            initial_position=ball_config["initial_position"],
-            initial_velocity=ball_config["initial_velocity"],
-            species=ball_config["species"],
-            molecule_id=ball_config["molecule_id"]
-        )
+    # Add water molecules
+    center_positions = [
+        (0, 0, well_height / 2),
+        (0.3, 0.3, well_height / 2)  # Slightly offset to distinguish the second molecule
+    ]
+    for i, center_position in enumerate(center_positions):
+        sim.create_water_molecule(center_position=center_position, velocity=(0.0, 0.0, 0.0), molecule_id=i + 1)
 
     return sim
 
 
-def update_animation(frame, sim, ball_plots, path_plots, show_path):
+def update_animation(frame, sim, ball_plots, path_plots, bond_lines, show_path):
     """
     Updates the animation for each frame.
-
-    Args:
-        frame (int): The current frame of the animation.
-        sim (Simulation): The simulation object to update.
-        ball_plots (list): List of ball plots.
-        path_plots (list): List of path plots.
-        show_path (bool): Flag to enable/disable path visualization.
-
-    Returns:
-        list: Updated plots for animation.
     """
     sim.update()  # Update simulation state
 
@@ -91,8 +79,8 @@ def update_animation(frame, sim, ball_plots, path_plots, show_path):
         ball_plots[i].set_data([ball.position[0]], [ball.position[1]])
         ball_plots[i].set_3d_properties([ball.position[2]])
 
-        # Combine and update paths if enabled
-        if show_path:
+        # Update paths if show_path is enabled
+        if show_path and path_plots[i] is not None:
             x_path, y_path, z_path = [], [], []
             for segment in ball.get_path_segments():
                 x_path += segment["x"]
@@ -100,11 +88,28 @@ def update_animation(frame, sim, ball_plots, path_plots, show_path):
                 z_path += segment["z"]
             path_plots[i].set_data(x_path, y_path)
             path_plots[i].set_3d_properties(z_path)
+        elif path_plots[i] is not None:
+            path_plots[i].set_data([], [])
+            path_plots[i].set_3d_properties([])
 
-    return ball_plots + path_plots
+    # Update bonds for water molecules
+    for i, bond_line in enumerate(bond_lines):
+        oxygen = sim.balls[i * 3]  # Oxygen
+        hydrogen1 = sim.balls[i * 3 + 1]  # First Hydrogen
+        hydrogen2 = sim.balls[i * 3 + 2]  # Second Hydrogen
+
+        bond_line[0].set_data([oxygen.position[0], hydrogen1.position[0]],
+                              [oxygen.position[1], hydrogen1.position[1]])
+        bond_line[0].set_3d_properties([oxygen.position[2], hydrogen1.position[2]])
+
+        bond_line[1].set_data([oxygen.position[0], hydrogen2.position[0]],
+                              [oxygen.position[1], hydrogen2.position[1]])
+        bond_line[1].set_3d_properties([oxygen.position[2], hydrogen2.position[2]])
+
+    return ball_plots + [line for bond in bond_lines for line in bond]
 
 
-def run_simulation(config, show_path=True):
+def run_simulation(config, show_path=False):
     """
     Runs and visualizes the simulation.
 
@@ -129,21 +134,35 @@ def run_simulation(config, show_path=True):
     # Plot the well boundary using the Well class
     sim.well.plot_boundary(ax)
 
-    # Initialize ball and path plots
-    ball_configs = config["balls"]
-    ball_plots = [ax.plot([], [], [], 'o', color=ball["color"], markersize=ball["size"])[0] for ball in ball_configs]
-    path_plots = [ax.plot([], [], [], color=ball["color"], linewidth=0.8)[0] for ball in ball_configs]
+    # Create ball and path plots
+    num_balls = len(sim.balls)
+    ball_plots = [ax.plot([], [], [], 'o', color=ball.color, markersize=ball.size)[0] for ball in sim.balls]
 
-    # Create the animation
+    # Initialize path plots conditionally
+    path_plots = []
+    if show_path:
+        path_plots = [ax.plot([], [], [], color='blue', linewidth=0.8)[0] for _ in range(num_balls)]
+    else:
+        path_plots = [None for _ in range(num_balls)]
+
+    # Create bond lines for water molecules
+    num_molecules = num_balls // 3
+    bond_lines = []
+    for _ in range(num_molecules):
+        line1, = ax.plot([], [], [], color="gray", linewidth=1)
+        line2, = ax.plot([], [], [], color="gray", linewidth=1)
+        bond_lines.append([line1, line2])
+
+    # Run the animation
     ani = animation.FuncAnimation(
         fig, update_animation, frames=int(sim.total_time / sim.dt), interval=sim.dt * 1000,
-        fargs=(sim, ball_plots, path_plots, show_path)
+        fargs=(sim, ball_plots, path_plots, bond_lines, show_path)
     )
 
     plt.show()
 
     # Plot temperature history
-    if hasattr(sim, "temperature_history"):
+    if hasattr(sim, "temperature_history") and sim.temperature_history:
         plt.figure()
         plt.plot(sim.temperature_history, color="blue", linewidth=1.5)
         plt.title("System Temperature Over Time")
@@ -164,7 +183,7 @@ def main():
     config = load_simulation_config(config_path, mode=mode)
 
     # Toggle path visualization ON/OFF
-    show_path = True  # Set to False to disable paths
+    show_path = False  # Set to True to enable paths
     run_simulation(config, show_path=show_path)
 
 

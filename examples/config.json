@@ -1,3 +1,4 @@
+
 {
   "newtonian": {
     "well": {
@@ -9,61 +10,7 @@
       "dt": 0.02,
       "movement_type": "newtonian"
     },
-    "balls": [
-      {
-        "mass": 16.0,
-        "initial_position": [0.0, 0.0, 0.0],
-        "initial_velocity": [0.0, 0.0, 0.0],
-        "molecule_id": 1,
-        "species": "O",
-        "color": "red",
-        "size": 10
-      },
-      {
-        "mass": 1.0,
-        "initial_position": [0.96, 0.0, 0.0],
-        "initial_velocity": [0.0, 0.0, 0.0],
-        "molecule_id": 1,
-        "species": "H",
-        "color": "blue",
-        "size": 7
-      },
-      {
-        "mass": 1.0,
-        "initial_position": [-0.48, 0.83, 0.0],
-        "initial_velocity": [0.0, 0.0, 0.0],
-        "molecule_id": 1,
-        "species": "H",
-        "color": "blue",
-        "size": 7
-      },
-      {
-        "mass": 16.0,
-        "initial_position": [0.0, 0.0, 1.2],
-        "initial_velocity": [0.0, 0.0, 0.0],
-        "molecule_id": 2,
-        "species": "O",
-        "color": "red",
-        "size": 10
-      },
-      {
-        "mass": 1.0,
-        "initial_position": [0.96, 0.0, 1.2],
-        "initial_velocity": [0.0, 0.0, 0.0],
-        "molecule_id": 2,
-        "species": "H",
-        "color": "blue",
-        "size": 7
-      },
-      {
-        "mass": 1.0,
-        "initial_position": [-0.48, 0.83, 1.2],
-        "initial_velocity": [0.0, 0.0, 0.0],
-        "molecule_id": 2,
-        "species": "H",
-        "color": "blue",
-        "size": 7
-      }
-    ]
+    "balls": []
   }
 }
+
