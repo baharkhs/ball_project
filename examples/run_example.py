@@ -2,7 +2,6 @@ import sys
 import os
 import json
 from ball_simulation.animation import Simulation
-from ball_simulation.input_output import load_config
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import numpy as np
@@ -22,7 +21,6 @@ def load_simulation_config(config_path="config.json", mode="newtonian"):
     Returns:
         dict: Configuration dictionary for the specified mode.
     """
-    # Resolve the absolute path relative to the script's directory
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     config_path = os.path.join(project_root, config_path)
 
@@ -64,45 +62,12 @@ def setup_simulation(config):
         sim.add_ball(
             mass=ball_config["mass"],
             initial_position=ball_config["initial_position"],
-            initial_velocity=ball_config["initial_velocity"]
+            initial_velocity=ball_config["initial_velocity"],
+            species=ball_config["species"],
+            molecule_id=ball_config["molecule_id"]
         )
 
     return sim
-
-
-def update_animation(frame, sim, ball_plots, path_plots, ball_configs):
-    """
-    Updates the animation for each frame.
-
-    Args:
-        frame (int): Current frame number (not used but required by FuncAnimation).
-        sim (Simulation): The simulation object to update.
-        ball_plots (list): List of Matplotlib Line3D objects for each ball.
-        path_plots (list): List of Matplotlib Line3D path plots for each ball.
-        ball_configs (list): Configuration for each ball (e.g., color, size).
-
-    Returns:
-        list: Updated Line3D objects for animation.
-    """
-    sim.update()
-
-    for i, ball in enumerate(sim.balls):
-        # Update ball positions
-        ball_plots[i].set_data([ball.position[0]], [ball.position[1]])
-        ball_plots[i].set_3d_properties([ball.position[2]])
-        ball_plots[i].set_color(ball_configs[i]["color"])
-        ball_plots[i].set_markersize(ball_configs[i]["size"])
-
-        # Update paths
-        x_path, y_path, z_path = [], [], []
-        for segment in ball.get_path_segments():
-            x_path += segment["x"]
-            y_path += segment["y"]
-            z_path += segment["z"]
-        path_plots[i].set_data(x_path, y_path)
-        path_plots[i].set_3d_properties(z_path)
-
-    return ball_plots + path_plots
 
 
 def visualize_simulation(sim, config):
@@ -113,19 +78,18 @@ def visualize_simulation(sim, config):
         sim (Simulation): The simulation object to visualize.
         config (dict): Configuration dictionary.
     """
-    # Set up the animation plot
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     ax.set_xlim(-sim.well.radius, sim.well.radius)
     ax.set_ylim(-sim.well.radius, sim.well.radius)
     ax.set_zlim(0, sim.well.height)
 
-    ax.set_title("Simulation of Ball Movements")
+    ax.set_title("Simulation of H2O Molecules")
     ax.set_xlabel("X (Å)")
     ax.set_ylabel("Y (Å)")
     ax.set_zlabel("Z (Å)")
 
-    # Draw the well boundary as a cylinder
+    # Draw the well boundary
     theta = np.linspace(0, 2 * np.pi, 100)
     z = np.linspace(0, sim.well.height, 50)
     theta, z = np.meshgrid(theta, z)
@@ -139,18 +103,24 @@ def visualize_simulation(sim, config):
     path_plots = [ax.plot([], [], [], color=ball["color"], linewidth=0.8)[0] for ball in ball_configs]
 
     def update_animation(frame, sim, ball_plots, path_plots):
-        """Updates the animation for each frame."""
-        sim.update()
+        """
+        Updates the animation for each frame.
+        """
+        sim.update()  # Update simulation state
+
         for i, ball in enumerate(sim.balls):
-            # Update ball position
+            # Update ball positions
             ball_plots[i].set_data([ball.position[0]], [ball.position[1]])
             ball_plots[i].set_3d_properties([ball.position[2]])
 
-            # Update path
-            path_data = ball.get_path_segments()
-            for segment in path_data:
-                path_plots[i].set_data(segment["x"], segment["y"])
-                path_plots[i].set_3d_properties(segment["z"])
+            # Combine and update paths
+            x_path, y_path, z_path = [], [], []
+            for segment in ball.get_path_segments():
+                x_path += segment["x"]
+                y_path += segment["y"]
+                z_path += segment["z"]
+            path_plots[i].set_data(x_path, y_path)
+            path_plots[i].set_3d_properties(z_path)
 
         return ball_plots + path_plots
 
@@ -163,23 +133,16 @@ def visualize_simulation(sim, config):
     plt.show()
 
 
-
 def main():
     """
     Main function to demonstrate running and visualizing a simulation.
     """
-    # Determine the simulation mode
-    mode = "newtonian"  # Change this to "monte_carlo" to test Monte Carlo simulation
-
-    # Load the configuration for the selected mode
+    mode = "newtonian"  # Change this to "monte_carlo" for Monte Carlo simulation
     config_path = "examples/config.json"
     config = load_simulation_config(config_path, mode=mode)
-
-    # Set up the simulation
     sim = setup_simulation(config)
-
-    # Visualize the simulation
     visualize_simulation(sim, config)
+
 
 if __name__ == "__main__":
     main()
