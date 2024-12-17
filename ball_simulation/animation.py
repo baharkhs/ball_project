@@ -70,6 +70,20 @@ class Well:
 
         return force
 
+    def plot_boundary(self, ax):
+        """
+        Draws the cylindrical boundary of the well for visualization.
+
+        Args:
+            ax (Axes3D): Matplotlib 3D axis to plot the well boundary.
+        """
+        theta = np.linspace(0, 2 * np.pi, 100)
+        z = np.linspace(0, self.height, 50)
+        theta, z = np.meshgrid(theta, z)
+        x = self.radius * np.cos(theta)
+        y = self.radius * np.sin(theta)
+        ax.plot_wireframe(x, y, z, color="gray", alpha=0.3)
+
 
 class Ball:
     def __init__(self, mass=18.0, initial_position=None, initial_velocity=None, species="O", molecule_id=None):
@@ -294,6 +308,47 @@ class Simulation:
                     species=species, molecule_id=molecule_id)
         self.balls.append(ball)
 
+    def create_water_molecule(self, center_position, velocity=(0, 0, 0), molecule_id=None):
+        """
+        Creates a water molecule (H2O) with two hydrogens and one oxygen atom.
+
+        Args:
+            center_position (tuple): The position of the oxygen atom.
+            velocity (tuple): Initial velocity for all atoms.
+            molecule_id (int): Unique molecule ID for tracking intra-molecular forces.
+        """
+        bond_length = 0.957  # Bond length in angstroms
+        angle_deg = 104.5  # Bond angle in degrees
+        angle_rad = np.radians(angle_deg)
+
+        # Oxygen atom at the center
+        self.add_ball(
+            mass=16.0,  # Oxygen mass
+            initial_position=np.array(center_position),
+            initial_velocity=np.array(velocity),
+            species="O",
+            molecule_id=molecule_id
+        )
+
+        # Hydrogen atoms
+        offset1 = np.array([bond_length * np.sin(angle_rad / 2), bond_length * np.cos(angle_rad / 2), 0])
+        offset2 = np.array([-bond_length * np.sin(angle_rad / 2), bond_length * np.cos(angle_rad / 2), 0])
+
+        self.add_ball(
+            mass=1.0,
+            initial_position=np.array(center_position) + offset1,
+            initial_velocity=np.array(velocity),
+            species="H",
+            molecule_id=molecule_id
+        )
+        self.add_ball(
+            mass=1.0,
+            initial_position=np.array(center_position) + offset2,
+            initial_velocity=np.array(velocity),
+            species="H",
+            molecule_id=molecule_id
+        )
+
     def apply_monte_carlo_perturbation(self, ball, k_B=0.0083144621, temperature=300):
         """
         Applies a random perturbation to the ball's position and accepts/rejects it using the Metropolis criterion.
@@ -341,7 +396,8 @@ class Simulation:
 
     def update(self, rescale_temperature=True, target_temperature=300, rescale_interval=100):
         """
-        Updates each ball's position, velocity, and handles forces and boundary conditions.
+        Updates each ball's position, velocity, and handles forces, boundary conditions,
+        temperature monitoring, and intra-molecular bonds.
 
         Args:
             rescale_temperature (bool): Flag to enable velocity rescaling.
@@ -396,6 +452,13 @@ class Simulation:
         # Step 6: Apply thermostat (velocity rescaling)
         if rescale_temperature and (self.current_step % rescale_interval == 0):
             self.apply_velocity_rescaling(target_temperature)
+
+        # Step 7: Monitor and collect temperature
+        temperature = self.compute_system_temperature()
+        print(f"Step {self.current_step}, Temperature: {temperature:.2f} K")
+        if not hasattr(self, "temperature_history"):
+            self.temperature_history = []
+        self.temperature_history.append(temperature)
 
         self.current_step += 1
 

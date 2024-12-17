@@ -70,14 +70,51 @@ def setup_simulation(config):
     return sim
 
 
-def visualize_simulation(sim, config):
+def update_animation(frame, sim, ball_plots, path_plots, show_path):
     """
-    Visualize the simulation using Matplotlib animation.
+    Updates the animation for each frame.
 
     Args:
-        sim (Simulation): The simulation object to visualize.
-        config (dict): Configuration dictionary.
+        frame (int): The current frame of the animation.
+        sim (Simulation): The simulation object to update.
+        ball_plots (list): List of ball plots.
+        path_plots (list): List of path plots.
+        show_path (bool): Flag to enable/disable path visualization.
+
+    Returns:
+        list: Updated plots for animation.
     """
+    sim.update()  # Update simulation state
+
+    for i, ball in enumerate(sim.balls):
+        # Update ball positions
+        ball_plots[i].set_data([ball.position[0]], [ball.position[1]])
+        ball_plots[i].set_3d_properties([ball.position[2]])
+
+        # Combine and update paths if enabled
+        if show_path:
+            x_path, y_path, z_path = [], [], []
+            for segment in ball.get_path_segments():
+                x_path += segment["x"]
+                y_path += segment["y"]
+                z_path += segment["z"]
+            path_plots[i].set_data(x_path, y_path)
+            path_plots[i].set_3d_properties(z_path)
+
+    return ball_plots + path_plots
+
+
+def run_simulation(config, show_path=True):
+    """
+    Runs and visualizes the simulation.
+
+    Args:
+        config (dict): Configuration dictionary for the simulation.
+        show_path (bool): Flag to enable/disable path visualization.
+    """
+    sim = setup_simulation(config)
+
+    # Set up the 3D visualization
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     ax.set_xlim(-sim.well.radius, sim.well.radius)
@@ -89,48 +126,31 @@ def visualize_simulation(sim, config):
     ax.set_ylabel("Y (Å)")
     ax.set_zlabel("Z (Å)")
 
-    # Draw the well boundary
-    theta = np.linspace(0, 2 * np.pi, 100)
-    z = np.linspace(0, sim.well.height, 50)
-    theta, z = np.meshgrid(theta, z)
-    x = sim.well.radius * np.cos(theta)
-    y = sim.well.radius * np.sin(theta)
-    ax.plot_wireframe(x, y, z, color="gray", alpha=0.3)
+    # Plot the well boundary using the Well class
+    sim.well.plot_boundary(ax)
 
     # Initialize ball and path plots
     ball_configs = config["balls"]
     ball_plots = [ax.plot([], [], [], 'o', color=ball["color"], markersize=ball["size"])[0] for ball in ball_configs]
     path_plots = [ax.plot([], [], [], color=ball["color"], linewidth=0.8)[0] for ball in ball_configs]
 
-    def update_animation(frame, sim, ball_plots, path_plots):
-        """
-        Updates the animation for each frame.
-        """
-        sim.update()  # Update simulation state
-
-        for i, ball in enumerate(sim.balls):
-            # Update ball positions
-            ball_plots[i].set_data([ball.position[0]], [ball.position[1]])
-            ball_plots[i].set_3d_properties([ball.position[2]])
-
-            # Combine and update paths
-            x_path, y_path, z_path = [], [], []
-            for segment in ball.get_path_segments():
-                x_path += segment["x"]
-                y_path += segment["y"]
-                z_path += segment["z"]
-            path_plots[i].set_data(x_path, y_path)
-            path_plots[i].set_3d_properties(z_path)
-
-        return ball_plots + path_plots
-
     # Create the animation
     ani = animation.FuncAnimation(
         fig, update_animation, frames=int(sim.total_time / sim.dt), interval=sim.dt * 1000,
-        fargs=(sim, ball_plots, path_plots)
+        fargs=(sim, ball_plots, path_plots, show_path)
     )
 
     plt.show()
+
+    # Plot temperature history
+    if hasattr(sim, "temperature_history"):
+        plt.figure()
+        plt.plot(sim.temperature_history, color="blue", linewidth=1.5)
+        plt.title("System Temperature Over Time")
+        plt.xlabel("Simulation Step")
+        plt.ylabel("Temperature (K)")
+        plt.grid(True)
+        plt.show()
 
 
 def main():
@@ -139,9 +159,13 @@ def main():
     """
     mode = "newtonian"  # Change this to "monte_carlo" for Monte Carlo simulation
     config_path = "examples/config.json"
+
+    # Load configuration and run simulation
     config = load_simulation_config(config_path, mode=mode)
-    sim = setup_simulation(config)
-    visualize_simulation(sim, config)
+
+    # Toggle path visualization ON/OFF
+    show_path = True  # Set to False to disable paths
+    run_simulation(config, show_path=show_path)
 
 
 if __name__ == "__main__":
