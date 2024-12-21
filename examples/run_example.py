@@ -109,7 +109,7 @@ def update_animation(frame, sim, ball_plots, path_plots, bond_lines, show_path):
     return ball_plots + [line for bond in bond_lines for line in bond]
 
 
-def run_simulation(config, show_path=False):
+def run_simulation(config, show_path=True):
     """
     Runs and visualizes the simulation.
 

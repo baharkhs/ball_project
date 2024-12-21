@@ -469,6 +469,7 @@ class Simulation:
 
         self.current_step += 1
 
+
     def apply_velocity_rescaling(self, target_temperature):
         """
         Rescales velocities to maintain a target temperature.
