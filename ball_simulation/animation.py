@@ -109,9 +109,7 @@ class Ball:
         self.species = species  # Type of particle ("H", "O")
         self.molecule_id = molecule_id  # Assign a molecule ID for intra/inter-molecular differentiation.
 
-    def compute_repulsion_force(self, other, repulsion_constant=1.0):
-        # Remove this function entirely.
-        pass
+    
 
     def compute_interaction_force(self, other, interaction_params, box_lengths):
         """
