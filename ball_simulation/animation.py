@@ -109,7 +109,7 @@ class Ball:
         self.species = species  # Type of particle ("H", "O")
         self.molecule_id = molecule_id  # Assign a molecule ID for intra/inter-molecular differentiation.
 
-    
+
 
     def compute_interaction_force(self, other, interaction_params, box_lengths):
         """
@@ -195,12 +195,12 @@ class Ball:
         # Angle force would require a third atom for angle constraints (to be implemented later)
         return bond_force
 
-    def apply_forces(self):
-        """
-        Placeholder for applying external forces (e.g., gravity) to the ball.
-        """
+    #def apply_forces(self):
+      #  """
+       # Placeholder for applying external forces (e.g., gravity) to the ball.
+        #"""
         # Extend this method in the future to include external forces (e.g., gravity or electric fields).
-        pass
+     #   pass
 
     def update_velocity_position(self, dt):
         """
