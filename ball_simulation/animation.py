@@ -59,14 +59,14 @@ class Well:
                 force[:2] = -repulsion_constant * np.exp(-overlap / wall_decay_length) * normal_direction
 
         # Repulsion from bottom z-boundary
-        if ball.position[2] < wall_decay_length:  # Near bottom wall
-            overlap = wall_decay_length - ball.position[2]
-            force[2] += repulsion_constant * np.exp(-overlap / wall_decay_length)
+        #if ball.position[2] < wall_decay_length:  # Near bottom wall
+         #   overlap = wall_decay_length - ball.position[2]
+          #  force[2] += repulsion_constant * np.exp(-overlap / wall_decay_length)
 
         # Repulsion from top z-boundary
-        if ball.position[2] > self.height - wall_decay_length:  # Near top wall
-            overlap = ball.position[2] - (self.height - wall_decay_length)
-            force[2] -= repulsion_constant * np.exp(-overlap / wall_decay_length)
+        #if ball.position[2] > self.height - wall_decay_length:  # Near top wall
+         #   overlap = ball.position[2] - (self.height - wall_decay_length)
+          #  force[2] -= repulsion_constant * np.exp(-overlap / wall_decay_length)
 
         return force
 
@@ -257,6 +257,26 @@ class Ball:
         """
         self.finalize_path()  # Ensure the current path segment is stored.
 
+    @staticmethod
+    def lennard_jones_potential(r, epsilon, sigma):
+        """
+        Calculate the Lennard-Jones potential for a given distance.
+
+        Args:
+            r (float): Distance between particles.
+            epsilon (float): Depth of the potential well.
+            sigma (float): Distance at which the potential is zero.
+
+        Returns:
+            float: Potential energy at distance r.
+        """
+        if r == 0:
+            return np.inf  # Avoid division by zero
+        sr = sigma / r
+        sr6 = sr ** 6
+        sr12 = sr6 ** 2
+        return 4 * epsilon * (sr12 - sr6)
+
 
 class Simulation:
     def __init__(self, well_radius=0.5, well_height=1.0, total_time=10.0, dt=0.001, movement_type="newtonian"):
@@ -276,6 +296,8 @@ class Simulation:
         self.balls = []  # A list to hold all ball objects in the simulation.
         self.movement_type = movement_type  # Type of movement for the simulation: "newtonian" or "monte_carlo".
         self.current_step = 0
+        self.potential_energy_data = []  # To store (distance, potential_energy) pairs
+        self.temperature_history = []  # Store temperature data
 
         # Define interaction parameters for different species
         self.interaction_params = {
@@ -294,14 +316,13 @@ class Simulation:
     def add_ball(self, mass=1.0, initial_position=None, initial_velocity=None, species="O", molecule_id=None):
         """
         Adds a ball to the simulation with the specified properties.
-
-        Args:
-            mass (float): Mass of the particle.
-            initial_position (array-like): Initial position of the particle.
-            initial_velocity (array-like): Initial velocity of the particle.
-            species (str): Type of particle (e.g., "H" for hydrogen, "O" for oxygen).
-            molecule_id (int): Molecule identifier for intra/inter-molecular interaction.
         """
+        # If no position is specified, place particles close together for repulsion testing
+        if initial_position is None:
+            # Place particles very close to one another (e.g., 0.1 Å apart)
+            close_position = [len(self.balls) * 0.1, len(self.balls) * 0.1, len(self.balls) * 0.1]
+            initial_position = close_position
+
         ball = Ball(mass=mass, initial_position=initial_position, initial_velocity=initial_velocity,
                     species=species, molecule_id=molecule_id)
         self.balls.append(ball)
@@ -399,6 +420,43 @@ class Simulation:
                 energy += np.sum(ball.compute_interaction_force(other, self.interaction_params, np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])) ** 2)
         return energy
 
+    def compute_potential_energy_data(self):
+        """
+        Compute potential energy vs. distance for all particle pairs.
+
+        Returns:
+            tuple: (distances, potential_energies)
+        """
+        distances = []
+        potential_energies = []
+        num_balls = len(self.balls)
+        box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
+
+        for i in range(num_balls):
+            for j in range(i + 1, num_balls):
+                ball1, ball2 = self.balls[i], self.balls[j]
+
+                # Calculate distance with periodic boundary conditions
+                delta = ball1.position - ball2.position
+                delta -= box_lengths * np.round(delta / box_lengths)
+                r = np.linalg.norm(delta)
+
+                # Get Lennard-Jones parameters
+                pair_key = tuple(sorted([ball1.species, ball2.species]))
+                params = self.interaction_params.get(pair_key, {"epsilon": 1.0, "sigma": 1.0})
+                epsilon, sigma = params["epsilon"], params["sigma"]
+
+                # Debugging outputs
+                print(f"Pair {i}-{j}: Distance = {r}, epsilon = {epsilon}, sigma = {sigma}")
+
+                # Calculate potential energy using Ball's method
+                potential_energy = Ball.lennard_jones_potential(r, epsilon, sigma)
+
+                distances.append(r)
+                potential_energies.append(potential_energy)
+
+        return distances, potential_energies
+
     def update(self, rescale_temperature=True, target_temperature=300, rescale_interval=100):
         """
         Updates each ball's position, velocity, and handles forces, boundary conditions,
@@ -409,6 +467,10 @@ class Simulation:
             target_temperature (float): Desired system temperature in Kelvin.
             rescale_interval (int): Frequency (in steps) to apply velocity rescaling.
         """
+        if not self.balls:
+            print("No balls in the simulation to update.")
+            return  # Exit early if no balls are present
+
         num_balls = len(self.balls)
         box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
 
@@ -461,35 +523,14 @@ class Simulation:
         # Step 7: Monitor and collect temperature
         temperature = self.compute_system_temperature()
         print(f"Step {self.current_step}, Temperature: {temperature:.2f} K")
-        if not hasattr(self, "temperature_history"):
-            self.temperature_history = []
         self.temperature_history.append(temperature)
 
         self.current_step += 1
 
-
-    def apply_velocity_rescaling(self, target_temperature):
-        """
-        Rescales velocities to maintain a target temperature.
-
-        Args:
-            target_temperature (float): Desired system temperature in Kelvin.
-        """
-        k_B = 0.0083144621  # Boltzmann constant in atomic units (amu * (angstrom/fs)^2 / K)
-
-        # Compute the current system temperature from kinetic energy
-        total_kinetic_energy = sum(0.5 * ball.mass * np.sum(ball.velocity ** 2) for ball in self.balls)
-        num_particles = len(self.balls)
-
-        if num_particles == 0 or total_kinetic_energy == 0:
-            return  # Avoid division by zero
-
-        current_temperature = (2 / (3 * num_particles * k_B)) * total_kinetic_energy
-
-        # Compute and apply the scaling factor to rescale velocities
-        scaling_factor = np.sqrt(target_temperature / current_temperature)
-        for ball in self.balls:
-            ball.velocity *= scaling_factor
+        # Collect potential energy data for each update
+        distances, potential_energies = self.compute_potential_energy_data()
+        if distances and potential_energies:  # Ensure there is valid data
+            self.potential_energy_data.extend(zip(distances, potential_energies))
 
     def compute_bond_force(self, ball1, ball2, bond_length=1.0, spring_constant=100.0):
         """
@@ -530,10 +571,133 @@ class Simulation:
 
         return (2 / (3 * num_particles * k_B)) * total_kinetic_energy
 
-    def finalize_simulation(self):
-        """Finalizes the path for each ball at the end of the simulation."""
+    #def finalize_simulation(self):
+     #   """Finalizes the path for each ball at the end of the simulation."""
+      #  for ball in self.balls:
+       #     ball.finalize_path()
+
+    def apply_velocity_rescaling(self, target_temperature):
+        """
+        Rescales velocities to maintain a target temperature.
+
+        Args:
+            target_temperature (float): Desired system temperature in Kelvin.
+        """
+        k_B = 0.0083144621  # Boltzmann constant in atomic units (amu * (angstrom/fs)^2 / K)
+
+        # Compute the current system temperature from kinetic energy
+        total_kinetic_energy = sum(0.5 * ball.mass * np.sum(ball.velocity ** 2) for ball in self.balls)
+        num_particles = len(self.balls)
+
+        if num_particles == 0 or total_kinetic_energy == 0:
+            return  # Avoid division by zero
+
+        current_temperature = (2 / (3 * num_particles * k_B)) * total_kinetic_energy
+
+        # Compute and apply the scaling factor to rescale velocities
+        scaling_factor = np.sqrt(target_temperature / current_temperature)
         for ball in self.balls:
-            ball.finalize_path()
+            ball.velocity *= scaling_factor
+
+    def compute_potential_energy_data(self):
+        """
+        Compute potential energy vs. distance for all particle pairs.
+
+        Returns:
+            tuple: (distances, potential_energies)
+        """
+        distances = []
+        potential_energies = []
+        num_balls = len(self.balls)
+        box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
+
+        for i in range(num_balls):
+            for j in range(i + 1, num_balls):
+                ball1, ball2 = self.balls[i], self.balls[j]
+
+                # Calculate distance with periodic boundary conditions
+                delta = ball1.position - ball2.position
+                delta -= box_lengths * np.round(delta / box_lengths)
+                r = np.linalg.norm(delta)
+
+                # Get Lennard-Jones parameters
+                pair_key = tuple(sorted([ball1.species, ball2.species]))
+                params = self.interaction_params.get(pair_key, {"epsilon": 1.0, "sigma": 1.0})
+                epsilon, sigma = params["epsilon"], params["sigma"]
+
+                # Debugging outputs
+                print(f"Pair {i}-{j}: Distance = {r:.3f}, epsilon = {epsilon}, sigma = {sigma}")
+
+                # Calculate potential energy using Ball's method
+                potential_energy = Ball.lennard_jones_potential(r, epsilon, sigma)
+
+                distances.append(r)
+                potential_energies.append(potential_energy)
+
+        return distances, potential_energies
+
+    def plot_potential_energy(self):
+        """
+        Plot potential energy vs. distance for the simulation.
+        """
+        distances, potential_energies = self.compute_potential_energy_data()
+
+        # Use one pair's epsilon and sigma for the theoretical curve
+        if self.balls:
+            pair_key = tuple(sorted([self.balls[0].species, self.balls[1].species]))
+            params = self.interaction_params.get(pair_key, {"epsilon": 1.0, "sigma": 1.0})
+            epsilon, sigma = params["epsilon"], params["sigma"]
+        else:
+            epsilon, sigma = 1.0, 1.0  # Defaults
+
+        # Generate theoretical Lennard-Jones curve
+        r_theoretical = np.linspace(0.5, 2.5, 100)  # Smooth range for plotting
+        theoretical_potential = [Ball.lennard_jones_potential(r, epsilon, sigma) for r in r_theoretical]
+
+        # Plot using matplotlib
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(10, 6))
+
+        # Plot theoretical curve
+        plt.plot(r_theoretical, theoretical_potential, color='red',
+                 label=fr"Theoretical LJ ($\epsilon$={epsilon}, $\sigma$={sigma})")
+
+        # Overlay simulation data
+        plt.scatter(distances, potential_energies, color="blue", alpha=0.6, label="Simulation Data")
+
+        plt.xlabel("Distance (Å)")
+        plt.ylabel("Potential Energy (eV)")
+        plt.title("Potential Energy vs Distance")
+        plt.grid(True)
+        plt.legend()
+        plt.show()
+
+    def plot_lennard_jones_curve(self, epsilon, sigma):
+        """
+        Plot the Lennard-Jones potential curve for a given epsilon and sigma.
+
+        Args:
+            epsilon (float): Depth of the potential well.
+            sigma (float): Finite distance at which the inter-particle potential is zero.
+        """
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        # Generate distances and calculate potential energies
+        distances = np.linspace(0.5, 3.0, 100)  # From 0.5σ to 3σ
+        potential_energies = [Ball.lennard_jones_potential(r, epsilon, sigma) for r in distances]
+
+        # Plot the potential curve
+        plt.figure(figsize=(10, 6))
+        plt.plot(distances, potential_energies, label=fr"LJ Potential ($\epsilon={epsilon}$, $\sigma={sigma}$)")
+        plt.axhline(0, color="gray", linestyle="--", linewidth=0.8)  # Zero energy line
+        plt.axvline(sigma, color="red", linestyle="--", label=r"$r=\sigma$ (Equilibrium distance)")
+        plt.xlabel("Distance (Å)")
+        plt.ylabel("Potential Energy (eV)")
+        plt.title("Lennard-Jones Potential Curve")
+        plt.legend()
+        plt.grid(True)
+        plt.show()
 
     def run(self):
         """
@@ -546,3 +710,7 @@ class Simulation:
 
         # Finalize the simulation by processing results.
         self.finalize_simulation()
+
+        # Visualize potential energy after simulation
+        self.plot_potential_energy()
+
