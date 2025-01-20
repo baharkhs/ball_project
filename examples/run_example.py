@@ -6,20 +6,9 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import numpy as np
 
-# Debugging: Print the current working directory
-print("Current working directory:", os.getcwd())
-
-
 def load_simulation_config(config_path="config.json", mode="newtonian"):
     """
     Load simulation configurations from a JSON file.
-
-    Args:
-        config_path (str): Path to the configuration file.
-        mode (str): Simulation mode to load ("newtonian" or "monte_carlo").
-
-    Returns:
-        dict: Configuration dictionary for the specified mode.
     """
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     config_path = os.path.join(project_root, config_path)
@@ -57,55 +46,51 @@ def setup_simulation(config):
     sim = Simulation(well_radius=well_radius, well_height=well_height, total_time=total_time, dt=dt)
     sim.set_movement_type(movement_type)
 
-    # Add water molecules or balls
-    center_positions = [
-        (0, 0, well_height / 2),  # Center of the well
-        (0.3, 0.3, well_height / 2),  # Offset slightly
-        (-0.3, -0.3, well_height / 2)  # Another position for testing
-    ]
+    # Add water molecules with specified colors and sizes
+    oxygen_molecules = config["particles"].get("oxygen_molecules", [])
 
-    for i, center_position in enumerate(center_positions):
-        sim.create_water_molecule(center_position=center_position, velocity=(0.0, 0.0, 0.0), molecule_id=i + 1)
+    for molecule in oxygen_molecules:
+        center_position = molecule["center_position"]
+        molecule_id = molecule["molecule_id"]
+
+        # Create water molecule and assign colors/sizes automatically inside the method
+        sim.create_water_molecule(center_position=center_position, molecule_id=molecule_id)
+
+    # Add custom particles with explicit types if needed
+    custom_particles = config["particles"].get("custom_particles", [])
+
+    for particle in custom_particles:
+        species = particle["species"]
+        position = particle["position"]
+        velocity = particle["velocity"]
+        mass = particle["mass"]
+
+        # Call add_ball without color and size, since it's handled inside the method
+        sim.add_ball(mass=mass, initial_position=position, initial_velocity=velocity, species=species)
 
     return sim
 
 
-def update_frame(frame, sim, ball_plots, temp_line, ax_temp):
-    """
-    Update function for animation.
-    """
-    sim.update()  # Update simulation state
 
-    # Update ball positions
+def update_animation(frame, sim, ball_plots):
+    """
+    Updates the animation for each frame.
+    """
+    sim.update()
+
     for i, ball in enumerate(sim.balls):
         ball_plots[i].set_data([ball.position[0]], [ball.position[1]])
         ball_plots[i].set_3d_properties([ball.position[2]])
 
-    # Update temperature plot
-    if len(sim.temperature_history) > 0:
-        temp_line.set_data(range(len(sim.temperature_history)), sim.temperature_history)
-        ax_temp.set_xlim(0, len(sim.temperature_history))
-        max_temp = max(sim.temperature_history) if max(sim.temperature_history) > 0 else 1
-        ax_temp.set_ylim(0, max_temp * 1.1)
+    return ball_plots
 
-    return ball_plots + [temp_line]
-
-
-def run_simulation(config, show_path=True):
+def run_simulation(config):
     """
     Runs and visualizes the simulation.
-
-    Args:
-        config (dict): Configuration dictionary for the simulation.
-        show_path (bool): Flag to enable/disable path visualization.
     """
     sim = setup_simulation(config)
 
-    if not sim.balls:
-        raise ValueError("No balls present in the simulation. Ensure balls are added during setup.")
-
-    # Set up the 3D visualization
-    fig = plt.figure(figsize=(10, 5))
+    fig = plt.figure(figsize=(12, 6))
     gs = fig.add_gridspec(1, 2, width_ratios=[2, 1])
     ax_sim = fig.add_subplot(gs[0], projection='3d')
     ax_temp = fig.add_subplot(gs[1])
@@ -129,43 +114,49 @@ def run_simulation(config, show_path=True):
     ax_temp.grid(True)
 
     # Create ball plots
-    ball_plots = [ax_sim.plot([], [], [], 'o', color=getattr(ball, 'color', 'blue'),
-                              markersize=getattr(ball, 'size', 6))[0] for ball in sim.balls]
+    ball_plots = [ax_sim.plot([], [], [], 'o', color=ball.color, markersize=ball.size)[0] for ball in sim.balls]
+
+    def update_frame(frame):
+        """Update function for animation."""
+        sim.update()
+
+        for i, ball in enumerate(sim.balls):
+            ball_plots[i].set_data([ball.position[0]], [ball.position[1]])
+            ball_plots[i].set_3d_properties([ball.position[2]])
+
+        # Update temperature plot
+        steps = np.arange(len(sim.temperature_history))
+        temp_line.set_data(steps, sim.temperature_history)
+        ax_temp.set_xlim(0, max(steps[-1], 1))
+        ax_temp.set_ylim(0, max(sim.temperature_history) + 50)
+
+        return ball_plots + [temp_line]
 
     ani = animation.FuncAnimation(
-        fig, update_frame, frames=int(sim.total_time / sim.dt), interval=sim.dt * 1000,
-        fargs=(sim, ball_plots, temp_line, ax_temp)
+        fig, update_frame,
+        frames=int(sim.total_time / sim.dt), interval=sim.dt * 1000
     )
 
     plt.show()
 
     # Plot potential energy after the simulation
-    if sim.potential_energy_data:
-        distances, potential_energies = zip(*sim.potential_energy_data)
-        plt.figure(figsize=(8, 6))
-        plt.scatter(distances, potential_energies, color="blue", alpha=0.6, label="Simulation Data")
-        plt.title("Potential Energy vs Distance")
-        plt.xlabel("Distance (Å)")
-        plt.ylabel("Potential Energy (eV)")
-        plt.legend()
-        plt.grid(True)
-        plt.show()
-
+    distances, potential_energies = zip(*sim.potential_energy_data)
+    plt.figure(figsize=(8, 6))
+    plt.scatter(distances, potential_energies, color="blue", alpha=0.6)
+    plt.title("Potential Energy vs Distance")
+    plt.xlabel("Distance (Å)")
+    plt.ylabel("Potential Energy (eV)")
+    plt.grid(True)
+    plt.show()
 
 def main():
     """
-    Main function to demonstrate running and visualizing a simulation.
+    Main function to run the simulation.
     """
-    mode = "newtonian"  # Change this to "monte_carlo" for Monte Carlo simulation
+    mode = "newtonian"
     config_path = "examples/config.json"
-
-    # Load configuration and run simulation
     config = load_simulation_config(config_path, mode=mode)
-
-    # Toggle path visualization ON/OFF
-    show_path = False  # Set to True to enable paths
-    run_simulation(config, show_path=show_path)
-
+    run_simulation(config)
 
 if __name__ == "__main__":
     main()

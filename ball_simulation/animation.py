@@ -86,30 +86,39 @@ class Well:
 
 
 class Ball:
-    def __init__(self, mass=18.0, initial_position=None, initial_velocity=None, species="O", molecule_id=None):
+    def __init__(self, mass=18.0, initial_position=None, initial_velocity=None, species="O", molecule_id=None,
+                 color=None, size=None):
         """
-        Represents a single particle with mass, position, velocity, and temperature attributes.
+        Represents a single particle with mass, position, velocity, and attributes.
 
         Args:
             mass (float): Mass of the particle in atomic mass units (amu).
             initial_position (array-like): Initial [x, y, z] position in angstroms.
             initial_velocity (array-like): Initial [vx, vy, vz] velocity in angstroms per femtosecond (fs).
+            species (str): Type of particle ("H" for Hydrogen, "O" for Oxygen).
+            molecule_id (int): ID for tracking molecules.
+            color (str): Visualization color (optional).
+            size (float): Visualization size (optional).
         """
         self.mass = mass  # Mass in atomic mass units (amu).
         self.position = np.array(initial_position) if initial_position is not None else np.array([0.0, 0.0, 0.0])
         self.velocity = np.array(initial_velocity, dtype=float) if initial_velocity is not None else np.array(
             [0.0, 0.0, 0.0])
-        self.initial_velocity = self.velocity.copy()  # Store the initial velocity for reference or reuse.
-        self.path_segments = []  # Stores completed path segments for visualization.
-        self.current_path_segment = {"x": [], "y": [], "z": []}  # Tracks the ongoing path segment.
-        self.skip_path_update = False  # Flag to indicate if path updates should be skipped (e.g., during PBC transitions).
-        self.temperature = self.calculate_temperature()  # Calculate the initial temperature of the ball.
-        self.force = np.zeros(3)  # Initialize the force acting on the ball to zero.
-        self.radius = 0.1  # Radius of the ball, used for collision detection or wall interactions.
-        self.species = species  # Type of particle ("H", "O")
-        self.molecule_id = molecule_id  # Assign a molecule ID for intra/inter-molecular differentiation.
+        self.initial_velocity = self.velocity.copy()
+        self.path_segments = []
+        self.current_path_segment = {"x": [], "y": [], "z": []}
+        self.skip_path_update = False
+        self.temperature = self.calculate_temperature()
+        self.force = np.zeros(3)
+        self.radius = 0.1
+        self.species = species
+        self.molecule_id = molecule_id
 
+        # Assign colors based on species, allowing overrides
+        self.color = color if color else ("red" if species == "O" else "blue" if species == "H" else "gray")
 
+        # Assign default size with overrides
+        self.size = size if size else (10 if species == "O" else 6 if species == "H" else 8)
 
     def compute_interaction_force(self, other, interaction_params, box_lengths):
         """
@@ -195,13 +204,6 @@ class Ball:
         # Angle force would require a third atom for angle constraints (to be implemented later)
         return bond_force
 
-    #def apply_forces(self):
-      #  """
-       # Placeholder for applying external forces (e.g., gravity) to the ball.
-        #"""
-        # Extend this method in the future to include external forces (e.g., gravity or electric fields).
-     #   pass
-
     def update_velocity_position(self, dt):
         """
         Updates the velocity and position of the ball based on the time step.
@@ -211,8 +213,6 @@ class Ball:
         """
         # Update the position using velocity (Newtonian motion: x = x + v * dt).
         self.position += self.velocity * dt
-
-
 
     def update_path(self):
         """
@@ -277,6 +277,28 @@ class Ball:
         sr12 = sr6 ** 2
         return 4 * epsilon * (sr12 - sr6)
 
+    @staticmethod
+    def lennard_jones_force(r, epsilon, sigma):
+        """
+        Calculate the Lennard-Jones force for a given distance.
+
+        Args:
+            r (float): Distance between particles.
+            epsilon (float): Depth of the potential well.
+            sigma (float): Distance at which the potential is zero.
+
+        Returns:
+            float: Force magnitude at distance r.
+        """
+        if r == 0:
+            return np.inf  # Avoid division by zero
+        sr = sigma / r
+        sr6 = sr ** 6
+        sr12 = sr6 ** 2
+        force_magnitude = 24 * epsilon * (2 * sr12 - sr6) / r
+        return force_magnitude
+
+
 
 class Simulation:
     def __init__(self, well_radius=0.5, well_height=1.0, total_time=10.0, dt=0.001, movement_type="newtonian"):
@@ -298,123 +320,98 @@ class Simulation:
         self.current_step = 0
         self.potential_energy_data = []  # To store (distance, potential_energy) pairs
         self.temperature_history = []  # Store temperature data
+        self.collective_variables = {
+            "total_energy": [],
+            "radial_distribution": []
+        }
 
         # Define interaction parameters for different species
         self.interaction_params = {
-                ("H", "H"): {"epsilon": 1.0, "sigma": 0.1, "cutoff": 2.5},
-                ("O", "O"): {"epsilon": 2.0, "sigma": 0.2, "cutoff": 5.0},
-                ("H", "O"): {"epsilon": 1.5, "sigma": 0.15, "cutoff": 4.0},
-                #("N", "N"): {"epsilon": 1.8, "sigma": 0.12, "cutoff": 3.5},
-                #("H", "N"): {"epsilon": 1.2, "sigma": 0.11, "cutoff": 3.0},
-                #("O", "N"): {"epsilon": 1.6, "sigma": 0.14, "cutoff": 4.5}
-            }
+            ("H", "H"): {"epsilon": 1.0, "sigma": 0.1, "cutoff": 2.5},
+            ("O", "O"): {"epsilon": 2.0, "sigma": 0.2, "cutoff": 5.0},
+            ("H", "O"): {"epsilon": 1.5, "sigma": 0.15, "cutoff": 4.0}
+        }
 
     def set_movement_type(self, movement_type="newtonian"):
         """Sets the movement type for all balls in the simulation."""
         self.movement_type = movement_type
 
-    def add_ball(self, mass=1.0, initial_position=None, initial_velocity=None, species="O", molecule_id=None):
+    def add_ball(self, mass=1.0, initial_position=None, initial_velocity=None, species="O", molecule_id=None,
+                 color=None, size=None):
         """
         Adds a ball to the simulation with the specified properties.
-        """
-        # If no position is specified, place particles close together for repulsion testing
-        if initial_position is None:
-            # Place particles very close to one another (e.g., 0.1 Å apart)
-            close_position = [len(self.balls) * 0.1, len(self.balls) * 0.1, len(self.balls) * 0.1]
-            initial_position = close_position
 
-        ball = Ball(mass=mass, initial_position=initial_position, initial_velocity=initial_velocity,
-                    species=species, molecule_id=molecule_id)
+        Args:
+            mass (float): Mass of the particle in atomic mass units (amu).
+            initial_position (array-like): Initial [x, y, z] position in angstroms.
+            initial_velocity (array-like): Initial [vx, vy, vz] velocity in angstroms per femtosecond (fs).
+            species (str): Type of particle ("O", "H").
+            molecule_id (int): Unique identifier for molecules.
+            color (str): Color for visualization.
+            size (int): Size of the ball for visualization.
+        """
+
+        if initial_position is None:
+            initial_position = [len(self.balls) * 0.1, len(self.balls) * 0.1, len(self.balls) * 0.1]
+
+        ball = Ball(mass=mass, initial_position=initial_position, initial_velocity=initial_velocity, species=species,
+                    molecule_id=molecule_id)
+
+        # Assign color and size based on species or provided values
+        if color is None or size is None:
+            if species == "O":
+                ball.color = "red"
+                ball.size = 10  # Oxygen should have a larger size
+            elif species == "H":
+                ball.color = "blue"
+                ball.size = 6  # Hydrogen should have a smaller size
+            else:
+                ball.color = "gray"
+                ball.size = 8  # Default for other atoms
+        else:
+            ball.color = color
+            ball.size = size
+
         self.balls.append(ball)
 
     def create_water_molecule(self, center_position, velocity=(0, 0, 0), molecule_id=None):
         """
         Creates a water molecule (H2O) with two hydrogens and one oxygen atom.
-
-        Args:
-            center_position (tuple): The position of the oxygen atom.
-            velocity (tuple): Initial velocity for all atoms.
-            molecule_id (int): Unique molecule ID for tracking intra-molecular forces.
         """
-        bond_length = 0.957  # Bond length in angstroms
-        angle_deg = 104.5  # Bond angle in degrees
+        bond_length = 0.957
+        angle_deg = 104.5
         angle_rad = np.radians(angle_deg)
 
-        # Oxygen atom at the center (Red, Larger Size)
-        self.add_ball(
-            mass=16.0,
-            initial_position=np.array(center_position),
-            initial_velocity=np.array(velocity),
-            species="O",
-            molecule_id=molecule_id
-        )
-        self.balls[-1].color = "red"
-        self.balls[-1].size = 10  # Large size for Oxygen
-
-        # Calculate offsets for hydrogen atoms (Blue, Smaller Size) with Z-component
+        self.add_ball(mass=16.0, initial_position=np.array(center_position), initial_velocity=np.array(velocity), species="O", molecule_id=molecule_id)
         offset1 = np.array([bond_length * np.sin(angle_rad / 2), bond_length * np.cos(angle_rad / 2), 0.1])
         offset2 = np.array([-bond_length * np.sin(angle_rad / 2), bond_length * np.cos(angle_rad / 2), -0.1])
 
-        self.add_ball(
-            mass=1.0,
-            initial_position=np.array(center_position) + offset1,
-            initial_velocity=np.array(velocity),
-            species="H",
-            molecule_id=molecule_id
-        )
-        self.balls[-1].color = "blue"
-        self.balls[-1].size = 6  # Small size for Hydrogen
-
-        self.add_ball(
-            mass=1.0,
-            initial_position=np.array(center_position) + offset2,
-            initial_velocity=np.array(velocity),
-            species="H",
-            molecule_id=molecule_id
-        )
-        self.balls[-1].color = "blue"
-        self.balls[-1].size = 6  # Small size for Hydrogen
+        self.add_ball(mass=1.0, initial_position=np.array(center_position) + offset1, initial_velocity=np.array(velocity), species="H", molecule_id=molecule_id)
+        self.add_ball(mass=1.0, initial_position=np.array(center_position) + offset2, initial_velocity=np.array(velocity), species="H", molecule_id=molecule_id)
 
     def apply_monte_carlo_perturbation(self, ball, k_B=0.0083144621, temperature=300):
         """
         Applies a random perturbation to the ball's position and accepts/rejects it using the Metropolis criterion.
-
-        Args:
-            ball (Ball): Ball to perturb.
-            k_B (float): Boltzmann constant in atomic units.
-            temperature (float): System temperature in Kelvin.
         """
-        # Store the current position and calculate current energy
         old_position = ball.position.copy()
         old_energy = self.calculate_particle_energy(ball)
 
-        # Propose a random move
-        perturbation = np.random.uniform(-0.1, 0.1, size=3)  # Small perturbation in x, y, z
+        perturbation = np.random.uniform(-0.1, 0.1, size=3)
         ball.position += perturbation
 
-        # Calculate the new energy
         new_energy = self.calculate_particle_energy(ball)
 
-        # Metropolis criterion
         delta_energy = new_energy - old_energy
         if delta_energy > 0 and np.random.rand() > np.exp(-delta_energy / (k_B * temperature)):
-            ball.position = old_position  # Reject the move
+            ball.position = old_position
 
     def calculate_particle_energy(self, ball):
         """
         Calculates the energy of a single particle due to interactions and wall repulsion.
-
-        Args:
-            ball (Ball): Ball whose energy will be computed.
-
-        Returns:
-            float: The total energy of the particle.
         """
         energy = 0.0
-        # Add wall repulsion energy
         energy += np.sum(self.well.compute_wall_repulsion_force(ball) ** 2)
 
-        # Add pairwise interaction energy
         for other in self.balls:
             if other is not ball:
                 energy += np.sum(ball.compute_interaction_force(other, self.interaction_params, np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])) ** 2)
@@ -423,9 +420,6 @@ class Simulation:
     def compute_potential_energy_data(self):
         """
         Compute potential energy vs. distance for all particle pairs.
-
-        Returns:
-            tuple: (distances, potential_energies)
         """
         distances = []
         potential_energies = []
@@ -436,20 +430,14 @@ class Simulation:
             for j in range(i + 1, num_balls):
                 ball1, ball2 = self.balls[i], self.balls[j]
 
-                # Calculate distance with periodic boundary conditions
                 delta = ball1.position - ball2.position
                 delta -= box_lengths * np.round(delta / box_lengths)
                 r = np.linalg.norm(delta)
 
-                # Get Lennard-Jones parameters
                 pair_key = tuple(sorted([ball1.species, ball2.species]))
                 params = self.interaction_params.get(pair_key, {"epsilon": 1.0, "sigma": 1.0})
                 epsilon, sigma = params["epsilon"], params["sigma"]
 
-                # Debugging outputs
-                print(f"Pair {i}-{j}: Distance = {r}, epsilon = {epsilon}, sigma = {sigma}")
-
-                # Calculate potential energy using Ball's method
                 potential_energy = Ball.lennard_jones_potential(r, epsilon, sigma)
 
                 distances.append(r)
@@ -457,112 +445,91 @@ class Simulation:
 
         return distances, potential_energies
 
+    def compute_radial_distribution_function(self, bins=50):
+        """
+        Computes the radial distribution function (RDF) for the particles.
+        """
+        num_balls = len(self.balls)
+        box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
+        distances = []
+
+        for i in range(num_balls):
+            for j in range(i + 1, num_balls):
+                delta = self.balls[i].position - self.balls[j].position
+                delta -= box_lengths * np.round(delta / box_lengths)
+                distances.append(np.linalg.norm(delta))
+
+        hist, bin_edges = np.histogram(distances, bins=bins, density=True)
+        self.collective_variables["radial_distribution"].append((bin_edges[:-1], hist))
+
     def update(self, rescale_temperature=True, target_temperature=300, rescale_interval=100):
         """
-        Updates each ball's position, velocity, and handles forces, boundary conditions,
-        temperature monitoring, and intra-molecular bonds.
-
-        Args:
-            rescale_temperature (bool): Flag to enable velocity rescaling.
-            target_temperature (float): Desired system temperature in Kelvin.
-            rescale_interval (int): Frequency (in steps) to apply velocity rescaling.
+        Updates each ball's position, velocity, and handles forces, boundary conditions, and temperature monitoring.
         """
         if not self.balls:
             print("No balls in the simulation to update.")
-            return  # Exit early if no balls are present
+            return
 
         num_balls = len(self.balls)
         box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
 
-        # Step 1: Reset forces for all balls
         for ball in self.balls:
             ball.force.fill(0)
 
-        # Step 2: Compute pairwise interaction forces
         for i in range(num_balls):
             for j in range(i + 1, num_balls):
-                interaction_force = self.balls[i].compute_interaction_force(
-                    self.balls[j], self.interaction_params, box_lengths
-                )
+                interaction_force = self.balls[i].compute_interaction_force(self.balls[j], self.interaction_params, box_lengths)
                 self.balls[i].force += interaction_force
                 self.balls[j].force -= interaction_force
 
-        # Step 3: Compute bond forces for intra-molecular bonds
-        for i in range(num_balls):
-            for j in range(i + 1, num_balls):
-                if self.balls[i].molecule_id == self.balls[j].molecule_id:  # Same molecule
-                    bond_force = self.compute_bond_force(self.balls[i], self.balls[j],
-                                                         bond_length=1.0, spring_constant=10.0)
-                    self.balls[i].force += bond_force
-                    self.balls[j].force -= bond_force
-
-        # Step 4: Compute wall repulsion forces
         for ball in self.balls:
             ball.force += self.well.compute_wall_repulsion_force(ball)
 
-        # Step 5: Update positions and velocities
         for ball in self.balls:
             if self.movement_type == "monte_carlo":
                 self.apply_monte_carlo_perturbation(ball)
 
-            # Update velocity and position
             acceleration = ball.force / ball.mass
             ball.velocity += acceleration * self.dt
             ball.position += ball.velocity * self.dt
 
-            # Apply periodic boundary conditions
             self.well.apply_pbc(ball)
-
-            # Update path for visualization
             ball.update_path()
 
-        # Step 6: Apply thermostat (velocity rescaling)
         if rescale_temperature and (self.current_step % rescale_interval == 0):
             self.apply_velocity_rescaling(target_temperature)
 
-        # Step 7: Monitor and collect temperature
         temperature = self.compute_system_temperature()
         print(f"Step {self.current_step}, Temperature: {temperature:.2f} K")
         self.temperature_history.append(temperature)
 
         self.current_step += 1
 
-        # Collect potential energy data for each update
-        distances, potential_energies = self.compute_potential_energy_data()
-        if distances and potential_energies:  # Ensure there is valid data
-            self.potential_energy_data.extend(zip(distances, potential_energies))
+        total_energy = sum(self.calculate_particle_energy(ball) for ball in self.balls)
+        self.collective_variables["total_energy"].append(total_energy)
+        self.compute_radial_distribution_function()
 
-    def compute_bond_force(self, ball1, ball2, bond_length=1.0, spring_constant=100.0):
+    def apply_velocity_rescaling(self, target_temperature):
         """
-        Computes a harmonic bond force to maintain a bond length between two balls.
-
-        Args:
-            ball1 (Ball): First ball in the bond.
-            ball2 (Ball): Second ball in the bond.
-            bond_length (float): Desired bond length.
-            spring_constant (float): Strength of the bond constraint.
-
-        Returns:
-            np.array: The force vector applied to ball1 (equal and opposite force for ball2).
+        Rescales velocities to maintain a target temperature.
         """
-        delta = ball2.position - ball1.position
-        r = np.linalg.norm(delta)
+        k_B = 0.0083144621
+        total_kinetic_energy = sum(0.5 * ball.mass * np.sum(ball.velocity ** 2) for ball in self.balls)
+        num_particles = len(self.balls)
 
-        # Harmonic spring force to maintain bond length
-        force_magnitude = -spring_constant * (r - bond_length)
-        force_vector = force_magnitude * (delta / r)
+        if num_particles == 0 or total_kinetic_energy == 0:
+            return
 
-        return force_vector
+        current_temperature = (2 / (3 * num_particles * k_B)) * total_kinetic_energy
+        scaling_factor = np.sqrt(target_temperature / current_temperature)
+        for ball in self.balls:
+            ball.velocity *= scaling_factor
 
     def compute_system_temperature(self):
         """
         Computes the current temperature of the system based on kinetic energy.
-
-        Returns:
-            float: The current system temperature in Kelvin.
         """
-        k_B = 0.0083144621  # Boltzmann constant in atomic units
-
+        k_B = 0.0083144621
         total_kinetic_energy = sum(0.5 * ball.mass * np.sum(ball.velocity ** 2) for ball in self.balls)
         num_particles = len(self.balls)
 
@@ -571,98 +538,28 @@ class Simulation:
 
         return (2 / (3 * num_particles * k_B)) * total_kinetic_energy
 
-    #def finalize_simulation(self):
-     #   """Finalizes the path for each ball at the end of the simulation."""
-      #  for ball in self.balls:
-       #     ball.finalize_path()
-
-    def apply_velocity_rescaling(self, target_temperature):
-        """
-        Rescales velocities to maintain a target temperature.
-
-        Args:
-            target_temperature (float): Desired system temperature in Kelvin.
-        """
-        k_B = 0.0083144621  # Boltzmann constant in atomic units (amu * (angstrom/fs)^2 / K)
-
-        # Compute the current system temperature from kinetic energy
-        total_kinetic_energy = sum(0.5 * ball.mass * np.sum(ball.velocity ** 2) for ball in self.balls)
-        num_particles = len(self.balls)
-
-        if num_particles == 0 or total_kinetic_energy == 0:
-            return  # Avoid division by zero
-
-        current_temperature = (2 / (3 * num_particles * k_B)) * total_kinetic_energy
-
-        # Compute and apply the scaling factor to rescale velocities
-        scaling_factor = np.sqrt(target_temperature / current_temperature)
-        for ball in self.balls:
-            ball.velocity *= scaling_factor
-
-    def compute_potential_energy_data(self):
-        """
-        Compute potential energy vs. distance for all particle pairs.
-
-        Returns:
-            tuple: (distances, potential_energies)
-        """
-        distances = []
-        potential_energies = []
-        num_balls = len(self.balls)
-        box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
-
-        for i in range(num_balls):
-            for j in range(i + 1, num_balls):
-                ball1, ball2 = self.balls[i], self.balls[j]
-
-                # Calculate distance with periodic boundary conditions
-                delta = ball1.position - ball2.position
-                delta -= box_lengths * np.round(delta / box_lengths)
-                r = np.linalg.norm(delta)
-
-                # Get Lennard-Jones parameters
-                pair_key = tuple(sorted([ball1.species, ball2.species]))
-                params = self.interaction_params.get(pair_key, {"epsilon": 1.0, "sigma": 1.0})
-                epsilon, sigma = params["epsilon"], params["sigma"]
-
-                # Debugging outputs
-                print(f"Pair {i}-{j}: Distance = {r:.3f}, epsilon = {epsilon}, sigma = {sigma}")
-
-                # Calculate potential energy using Ball's method
-                potential_energy = Ball.lennard_jones_potential(r, epsilon, sigma)
-
-                distances.append(r)
-                potential_energies.append(potential_energy)
-
-        return distances, potential_energies
-
     def plot_potential_energy(self):
         """
         Plot potential energy vs. distance for the simulation.
         """
         distances, potential_energies = self.compute_potential_energy_data()
 
-        # Use one pair's epsilon and sigma for the theoretical curve
         if self.balls:
             pair_key = tuple(sorted([self.balls[0].species, self.balls[1].species]))
             params = self.interaction_params.get(pair_key, {"epsilon": 1.0, "sigma": 1.0})
             epsilon, sigma = params["epsilon"], params["sigma"]
         else:
-            epsilon, sigma = 1.0, 1.0  # Defaults
+            epsilon, sigma = 1.0, 1.0
 
-        # Generate theoretical Lennard-Jones curve
-        r_theoretical = np.linspace(0.5, 2.5, 100)  # Smooth range for plotting
+        r_theoretical = np.linspace(0.5, 2.5, 100)
         theoretical_potential = [Ball.lennard_jones_potential(r, epsilon, sigma) for r in r_theoretical]
 
-        # Plot using matplotlib
         import matplotlib.pyplot as plt
         plt.figure(figsize=(10, 6))
 
-        # Plot theoretical curve
         plt.plot(r_theoretical, theoretical_potential, color='red',
                  label=fr"Theoretical LJ ($\epsilon$={epsilon}, $\sigma$={sigma})")
 
-        # Overlay simulation data
         plt.scatter(distances, potential_energies, color="blue", alpha=0.6, label="Simulation Data")
 
         plt.xlabel("Distance (Å)")
@@ -672,32 +569,33 @@ class Simulation:
         plt.legend()
         plt.show()
 
-    def plot_lennard_jones_curve(self, epsilon, sigma):
+    def plot_collective_variables(self):
         """
-        Plot the Lennard-Jones potential curve for a given epsilon and sigma.
-
-        Args:
-            epsilon (float): Depth of the potential well.
-            sigma (float): Finite distance at which the inter-particle potential is zero.
+        Plots collective variables such as total energy and radial distribution function.
         """
         import matplotlib.pyplot as plt
-        import numpy as np
 
-        # Generate distances and calculate potential energies
-        distances = np.linspace(0.5, 3.0, 100)  # From 0.5σ to 3σ
-        potential_energies = [Ball.lennard_jones_potential(r, epsilon, sigma) for r in distances]
-
-        # Plot the potential curve
+        # Plot total energy
         plt.figure(figsize=(10, 6))
-        plt.plot(distances, potential_energies, label=fr"LJ Potential ($\epsilon={epsilon}$, $\sigma={sigma}$)")
-        plt.axhline(0, color="gray", linestyle="--", linewidth=0.8)  # Zero energy line
-        plt.axvline(sigma, color="red", linestyle="--", label=r"$r=\sigma$ (Equilibrium distance)")
-        plt.xlabel("Distance (Å)")
-        plt.ylabel("Potential Energy (eV)")
-        plt.title("Lennard-Jones Potential Curve")
+        plt.plot(self.collective_variables["total_energy"], label="Total Energy")
+        plt.xlabel("Simulation Step")
+        plt.ylabel("Energy (eV)")
+        plt.title("Total Energy Over Time")
         plt.legend()
         plt.grid(True)
         plt.show()
+
+        # Plot radial distribution function
+        if self.collective_variables["radial_distribution"]:
+            bins, rdf = self.collective_variables["radial_distribution"][-1]
+            plt.figure(figsize=(10, 6))
+            plt.bar(bins, rdf, width=(bins[1] - bins[0]), alpha=0.6, label="Radial Distribution Function")
+            plt.xlabel("Distance (Å)")
+            plt.ylabel("g(r)")
+            plt.title("Radial Distribution Function")
+            plt.legend()
+            plt.grid(True)
+            plt.show()
 
     def run(self):
         """
@@ -705,12 +603,8 @@ class Simulation:
         """
         current_time = 0.0
         while current_time < self.total_time:
-            self.update()  # Update all ball positions, velocities, and forces.
-            current_time += self.dt  # Increment the current time by the time step.
+            self.update()
+            current_time += self.dt
 
-        # Finalize the simulation by processing results.
-        self.finalize_simulation()
-
-        # Visualize potential energy after simulation
         self.plot_potential_energy()
-
+        self.plot_collective_variables()
