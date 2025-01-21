@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
 from unittest.mock import patch
-from ball_simulation.animation import Simulation  # Import your main Simulation class
+from ball_simulation.simulation import Simulation  # Import your main Simulation class
 
 class TestAnimation(unittest.TestCase):
     @patch('numpy.random.normal')

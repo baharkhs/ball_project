@@ -20,26 +20,7 @@
           "molecule_id": 2
         }
       ],
-      "custom_particles": [
-        {
-          "species": "O",
-          "position": [0.2, 0.2, 0.5],
-          "velocity": [0.0, 0.0, 0.0],
-          "mass": 16.0
-        },
-        {
-          "species": "H",
-          "position": [0.3, 0.3, 0.7],
-          "velocity": [0.1, -0.1, 0.0],
-          "mass": 1.0
-        },
-        {
-          "species": "H",
-          "position": [0.4, 0.4, 0.8],
-          "velocity": [-0.1, 0.1, 0.0],
-          "mass": 1.0
-        }
-      ]
+      "custom_particles": []
     }
   }
 }

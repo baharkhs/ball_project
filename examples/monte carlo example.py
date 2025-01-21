@@ -1,7 +1,7 @@
 import sys
 import os
 import json
-from ball_simulation.animation import Simulation
+from ball_simulation.simulation import Simulation
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import numpy as np

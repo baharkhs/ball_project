@@ -2,7 +2,7 @@
 
 import os
 import json
-from ball_simulation.animation import Simulation
+from ball_simulation.simulation import Simulation
 from ball_simulation.input_output import load_config
 
 
