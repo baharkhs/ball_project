@@ -1,10 +1,15 @@
+# example_run.py
+
 import sys
 import os
 import json
-from ball_simulation.simulation import Simulation
+import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-import numpy as np
+
+# Import from your local modules
+from ball_simulation.simulation import Simulation
+from ball_simulation.plotting import SimulationPlotter
 
 def load_simulation_config(config_path="config.json", mode="newtonian"):
     """
@@ -43,59 +48,79 @@ def setup_simulation(config):
     movement_type = config["simulation"]["movement_type"]
 
     # Initialize the simulation
-    sim = Simulation(well_radius=well_radius, well_height=well_height, total_time=total_time, dt=dt)
+    sim = Simulation(
+        well_radius=well_radius,
+        well_height=well_height,
+        total_time=total_time,
+        dt=dt
+    )
     sim.set_movement_type(movement_type)
 
-    # Add water molecules with specified colors and sizes
+    # Add water molecules (H2O)
     oxygen_molecules = config["particles"].get("oxygen_molecules", [])
-
     for molecule in oxygen_molecules:
         center_position = molecule["center_position"]
         molecule_id = molecule["molecule_id"]
-
-        # Create water molecule and assign colors/sizes automatically inside the method
         sim.create_water_molecule(center_position=center_position, molecule_id=molecule_id)
 
-    # Add custom particles with explicit types if needed
+    # Add custom particles if needed
     custom_particles = config["particles"].get("custom_particles", [])
-
     for particle in custom_particles:
         species = particle["species"]
         position = particle["position"]
         velocity = particle["velocity"]
         mass = particle["mass"]
-
-        # Call add_ball without color and size, since it's handled inside the method
-        sim.add_ball(mass=mass, initial_position=position, initial_velocity=velocity, species=species)
+        sim.add_ball(
+            mass=mass,
+            initial_position=position,
+            initial_velocity=velocity,
+            species=species
+        )
 
     return sim
 
 
-
-def update_animation(frame, sim, ball_plots):
+def update_animation(frame, sim, ball_plots, temp_line, ax_temp):
     """
     Updates the animation for each frame.
     """
+    # Advance simulation by one step
     sim.update()
 
+    # Update ball positions in 3D
     for i, ball in enumerate(sim.balls):
         ball_plots[i].set_data([ball.position[0]], [ball.position[1]])
         ball_plots[i].set_3d_properties([ball.position[2]])
 
-    return ball_plots
+    # Update temperature plot
+    steps = np.arange(len(sim.temperature_history))
+    temp_line.set_data(steps, sim.temperature_history)
+
+    # Rescale the temperature axes if needed
+    ax_temp.set_xlim(0, max(1, len(steps)))
+    if len(sim.temperature_history) > 0:
+        max_temp = max(sim.temperature_history)
+        ax_temp.set_ylim(0, max_temp + 50)
+
+    return ball_plots + [temp_line]
+
 
 def run_simulation(config):
     """
-    Runs and visualizes the simulation.
+    Runs and visualizes the simulation with a real-time 3D animation + temperature plot,
+    then plots the potential energy data after completion.
     """
+    # 1) Set up the Simulation object
     sim = setup_simulation(config)
 
+    # 2) Figure and subplots
     fig = plt.figure(figsize=(12, 6))
     gs = fig.add_gridspec(1, 2, width_ratios=[2, 1])
+
     ax_sim = fig.add_subplot(gs[0], projection='3d')
     ax_temp = fig.add_subplot(gs[1])
 
-    # Set up simulation plot
+    # 3) Configure the 3D simulation axes
     ax_sim.set_xlim(-sim.well.radius, sim.well.radius)
     ax_sim.set_ylim(-sim.well.radius, sim.well.radius)
     ax_sim.set_zlim(0, sim.well.height)
@@ -103,9 +128,11 @@ def run_simulation(config):
     ax_sim.set_xlabel("X (Å)")
     ax_sim.set_ylabel("Y (Å)")
     ax_sim.set_zlabel("Z (Å)")
+
+    # Draw the cylindrical boundary
     sim.well.plot_boundary(ax_sim)
 
-    # Set up temperature plot
+    # 4) Configure the temperature subplot
     ax_temp.set_title("System Temperature Over Time")
     ax_temp.set_xlabel("Simulation Step")
     ax_temp.set_ylabel("Temperature (K)")
@@ -113,41 +140,46 @@ def run_simulation(config):
     ax_temp.legend()
     ax_temp.grid(True)
 
-    # Create ball plots
-    ball_plots = [ax_sim.plot([], [], [], 'o', color=ball.color, markersize=ball.size)[0] for ball in sim.balls]
+    # 5) Create ball plots
+    ball_plots = [
+        ax_sim.plot([], [], [], 'o', color=b.color, markersize=b.size)[0]
+        for b in sim.balls
+    ]
 
+    # 6) Define update function for animation
     def update_frame(frame):
-        """Update function for animation."""
-        sim.update()
+        return update_animation(frame, sim, ball_plots, temp_line, ax_temp)
 
-        for i, ball in enumerate(sim.balls):
-            ball_plots[i].set_data([ball.position[0]], [ball.position[1]])
-            ball_plots[i].set_3d_properties([ball.position[2]])
-
-        # Update temperature plot
-        steps = np.arange(len(sim.temperature_history))
-        temp_line.set_data(steps, sim.temperature_history)
-        ax_temp.set_xlim(0, max(steps[-1], 1))
-        ax_temp.set_ylim(0, max(sim.temperature_history) + 50)
-
-        return ball_plots + [temp_line]
-
+    # 7) Create the animation
+    frames = int(sim.total_time / sim.dt)
     ani = animation.FuncAnimation(
         fig, update_frame,
-        frames=int(sim.total_time / sim.dt), interval=sim.dt * 1000
+        frames=frames,
+        interval=sim.dt * 1000,  # in milliseconds
+        blit=False
     )
 
+    # 8) Show the real-time animation
     plt.show()
 
-    # Plot potential energy after the simulation
-    distances, potential_energies = zip(*sim.potential_energy_data)
-    plt.figure(figsize=(8, 6))
-    plt.scatter(distances, potential_energies, color="blue", alpha=0.6)
-    plt.title("Potential Energy vs Distance")
-    plt.xlabel("Distance (Å)")
-    plt.ylabel("Potential Energy (eV)")
-    plt.grid(True)
-    plt.show()
+    # 9) After the simulation finishes, plot potential energy
+    if sim.potential_energy_data:
+        # Potential energy data is stored as (distance, potential) in sim.potential_energy_data
+        distances, potential_energies = zip(*sim.potential_energy_data)
+        plt.figure(figsize=(8, 6))
+        plt.scatter(distances, potential_energies, color="blue", alpha=0.6)
+        plt.title("Potential Energy vs Distance")
+        plt.xlabel("Distance (Å)")
+        plt.ylabel("Potential Energy (eV)")
+        plt.grid(True)
+        plt.show()
+    else:
+        print("No potential energy data was collected in sim.potential_energy_data.")
+
+
+    plotter = SimulationPlotter(sim)
+    plotter.plot_all()
+
 
 def main():
     """
