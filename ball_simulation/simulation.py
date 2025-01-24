@@ -130,25 +130,37 @@ class Simulation:
 
     def compute_potential_energy_data(self):
         """
-        Calculate potential energy only between the two oxygen atoms.
+        Computes the potential energy data analytically and from the simulation.
+
+        1. Analytical curve: Predefined range of distances.
+        2. Simulation data: Based on particle positions in the system.
         """
+        pair_key = ("O", "O")  # Focus on oxygen atoms for plotting
+        epsilon, sigma = self.interaction_params[pair_key]["epsilon"], self.interaction_params[pair_key]["sigma"]
+
+        # 1. Analytical Lennard-Jones potential over a range of distances
+        r_analytical = np.linspace(0.1, 3.0, 200)  # Define a range of distances in angstroms
+        lj_analytical = 4 * epsilon * ((sigma / r_analytical) ** 12 - (sigma / r_analytical) ** 6)
+
+        # Store analytical values for plotting later
+        self.analytical_potential_energy_data = list(zip(r_analytical, lj_analytical))
+
+        # 2. Simulation-based Lennard-Jones potential (Oxygen-Oxygen only)
         oxygens = [b for b in self.balls if b.species == "O"]
         if len(oxygens) != 2:
             return [], []
 
-        box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
-
+        # Compute pairwise distance considering periodic boundary conditions
         delta = oxygens[0].position - oxygens[1].position
+        box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
         delta -= box_lengths * np.round(delta / box_lengths)
-        r = np.linalg.norm(delta)
+        r_simulated = np.linalg.norm(delta)
 
-        pair_key = ("O", "O")
-        params = self.interaction_params[pair_key]
-        epsilon, sigma = params["epsilon"], params["sigma"]
-        potential_energy = Ball.lennard_jones_potential(r, epsilon, sigma)
+        # Compute LJ potential from current simulation
+        lj_simulated = 4 * epsilon * ((sigma / r_simulated) ** 12 - (sigma / r_simulated) ** 6)
+        self.potential_energy_data.append((r_simulated, lj_simulated))
 
-        self.potential_energy_data.append((r, potential_energy))
-        return self.potential_energy_data
+        return self.potential_energy_data, self.analytical_potential_energy_data
 
     def update(self, rescale_temperature=True, target_temperature=300, rescale_interval=50):
         if not self.balls:
