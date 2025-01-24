@@ -55,7 +55,7 @@ class Ball:
         delta -= box_lengths * np.round(delta / box_lengths)  # PBC adjustment
         r = np.linalg.norm(delta)
 
-        # Avoid singularities or forces beyond cutoff
+
         r_min = 0.8 * sigma
         if r < r_min:
             r = r_min
@@ -115,7 +115,7 @@ class Ball:
         # Bond force (Hooke's law)
         bond_force = -k_bond * (r - bond_length) * (delta / r)
 
-        # Angle force would require a third atom for angle constraints (to be implemented later)
+
         return bond_force
 
     def update_velocity_position(self, dt):

@@ -1,4 +1,3 @@
-# example_run.py
 
 import sys
 import os
