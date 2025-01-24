@@ -65,6 +65,3 @@ def setup_simulation(config):
 
     return sim
 
-# Note: We do NOT define a main() that runs anything here,
-# so this file will not produce any output by itself.
-# It just provides helper functions for other scripts to import.
