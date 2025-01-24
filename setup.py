@@ -9,10 +9,8 @@ setup(
     version="0.1.0",      # Initial version number
     #author=""
     #author_email=""
-    description="A simulation of bouncing balls in a cylindrical well",  # Short project description
-    #long_description=open("README.md").read(),  # Use README.md as the long description
-    #long_description_content_type="text/markdown",
-    url="https://github.com/bahark97/ball_project",  # URL of your project's repository
+    description="A simulation of bouncing balls in a cylindrical well",
+    url="https://github.com/baharkkhs/ball_project",
     packages=find_packages(),
     install_requires=required,  # Dependencies listed in requirements.txt
     classifiers=[
