@@ -1,6 +1,6 @@
 import numpy as np
 class Ball:
-    def __init__(self, mass=18.0, initial_position=None, initial_velocity=None, species="O", molecule_id=None,
+    def __init__(self, mass=None, initial_position=None, initial_velocity=None, species="O", molecule_id=None,
                  color=None, size=None):
         """
         Represents a single particle with mass, position, velocity, and attributes.
@@ -28,11 +28,20 @@ class Ball:
         self.species = species
         self.molecule_id = molecule_id
 
+        # Assign charges based on species
+        self.charge = -0.834 if species == "O" else 0.417  # TIP3P Model
+
         # Assign colors based on species, allowing overrides
         self.color = color if color else ("red" if species == "O" else "blue" if species == "H" else "gray")
 
         # Assign default size with overrides
         self.size = size if size else (10 if species == "O" else 6 if species == "H" else 8)
+
+        # Assign correct mass based on species
+        if mass is None:
+            self.mass = 16.0 if species == "O" else 1.0  # Default mass for O and H
+        else:
+            self.mass = mass
 
     def compute_interaction_force(self, other, interaction_params, box_lengths):
         """
@@ -73,6 +82,27 @@ class Ball:
         force_magnitude = min(force_magnitude, max_force)
 
         return force_magnitude * (delta / r)
+
+    def compute_coulombic_force(self, other, box_lengths):
+        """
+        Computes the Coulombic force between two charged particles.
+        """
+        k_e = 1389.35  # Coulomb constant in (kJ/mol·Å·e^2), correct for distances in Å
+
+
+        # Compute displacement with PBC
+        delta = self.position - other.position
+        delta -= box_lengths * np.round(delta / box_lengths)
+        r = np.linalg.norm(delta)
+
+        if r == 0:
+            return np.zeros(3)  # Avoid division by zero
+
+        # Coulombic force calculation
+        force_magnitude = k_e * (self.charge * other.charge) / (r ** 2)
+        force_direction = delta / r
+
+        return force_magnitude * force_direction
 
     def calculate_kinetic_energy(self):
         """

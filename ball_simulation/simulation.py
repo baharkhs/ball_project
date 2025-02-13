@@ -2,12 +2,13 @@ import numpy as np
 from ball_simulation.well import Well
 from ball_simulation.ball import Ball
 
+
 class Simulation:
-    def __init__(self, well_radius=0.5, well_height=1.0, total_time=10.0, dt=0.001, movement_type="newtonian"):
+    def __init__(self, well_radius=0.6, well_height=2.0, total_time=15.0, dt=0.001, movement_type="newtonian"):
         """
-        Initializes the simulation environment, parameters, and balls.
+        Initializes the simulation.
         """
-        self.well = Well(well_radius, well_height)  # Cylindrical well
+        self.well = Well(well_radius, well_height)
         self.dt = dt
         self.total_time = total_time
         self.balls = []
@@ -16,15 +17,11 @@ class Simulation:
 
         self.potential_energy_data = []
         self.temperature_history = []
-        self.collective_variables = {
-            "total_energy": [],
-            "radial_distribution": []
-        }
 
-        # Track molecules
+        # Dictionary: molecule_id -> {"O": index, "H1": index, "H2": index}
         self.molecules = {}
 
-        # Lennard-Jones interaction parameters
+        # Standard nonbonded Lennard-Jones parameters (for atoms in different molecules)
         self.interaction_params = {
             ("H", "H"): {"epsilon": 0.3, "sigma": 0.1, "cutoff": 2.5},
             ("O", "O"): {"epsilon": 0.8, "sigma": 0.3, "cutoff": 5.0},
@@ -38,128 +35,140 @@ class Simulation:
                  species="O", molecule_id=None, color=None, size=None):
         if initial_position is None:
             initial_position = [0.0, 0.0, 0.0]
-
         ball = Ball(
             mass=mass,
-            initial_position=initial_position,
-            initial_velocity=initial_velocity,
+            initial_position=np.array(initial_position, dtype=float),
+            initial_velocity=np.array(initial_velocity, dtype=float) if initial_velocity is not None else np.zeros(3),
             species=species,
             molecule_id=molecule_id,
             color=color,
             size=size
         )
         self.balls.append(ball)
-        return len(self.balls) - 1  # return index
+        return len(self.balls) - 1
 
     def create_water_molecule(self, center_position, velocity=(0, 0, 0), molecule_id=None):
         """
-        Creates an H2O molecule (1 O + 2 H) and records their indices in self.molecules.
+        Creates one water molecule (1 O and 2 H) at the given center_position.
+        The O–H bond length is 0.957 Å.
+        (We ignore the bond angle for simplicity.)
         """
         bond_length = 0.957
-        angle_deg = 104.5
-        angle_rad = np.radians(angle_deg)
-
-        # 1) Add Oxygen
+        # For simplicity, we use fixed offsets.
+        # You can adjust the offsets if needed.
         iO = self.add_ball(
             mass=16.0,
-            initial_position=np.array(center_position),
-            initial_velocity=np.array(velocity),
+            initial_position=center_position,
+            initial_velocity=velocity,
             species="O",
             molecule_id=molecule_id
         )
-
-        # 2) Compute offsets for the two H
-        offset1 = np.array([
-            bond_length * np.sin(angle_rad / 2),
-            bond_length * np.cos(angle_rad / 2),
-            0.1
-        ])
-        offset2 = np.array([
-            -bond_length * np.sin(angle_rad / 2),
-            bond_length * np.cos(angle_rad / 2),
-            -0.1
-        ])
-
+        # Place two hydrogens with a slight offset in z so they don't completely overlap.
+        offset1 = np.array([bond_length, 0.0, 0.1])
+        offset2 = np.array([-bond_length, 0.0, -0.1])
         iH1 = self.add_ball(
             mass=1.0,
             initial_position=np.array(center_position) + offset1,
-            initial_velocity=np.array(velocity),
+            initial_velocity=velocity,
             species="H",
             molecule_id=molecule_id
         )
         iH2 = self.add_ball(
             mass=1.0,
             initial_position=np.array(center_position) + offset2,
-            initial_velocity=np.array(velocity),
+            initial_velocity=velocity,
             species="H",
             molecule_id=molecule_id
         )
-
         self.molecules[molecule_id] = {"O": iO, "H1": iH1, "H2": iH2}
 
-    def compute_intermolecular_forces(self):
+    def compute_forces(self):
+        """
+        Computes forces between all pairs using Lennard-Jones potentials.
+        For atoms in the same water molecule (i.e. intramolecular), we use a different set
+        of LJ parameters to “glue” O and H together.
+        No angular force is applied.
+        """
         num_balls = len(self.balls)
+        # Periodic boundary box dimensions.
         box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
 
         for i in range(num_balls):
             for j in range(i + 1, num_balls):
-                bi, bj = self.balls[i], self.balls[j]
-                if bi.molecule_id == bj.molecule_id:
-                    continue  # Ignore intra-molecular forces
+                bi = self.balls[i]
+                bj = self.balls[j]
 
-                f_ij = bi.compute_interaction_force(bj, self.interaction_params, box_lengths)
-                bi.force += f_ij
-                bj.force -= f_ij
+                # If both belong to the same molecule, use intramolecular parameters
+                if (bi.molecule_id is not None and bj.molecule_id is not None and
+                        bi.molecule_id == bj.molecule_id):
+                    if set([bi.species, bj.species]) == set(["O", "H"]):
+                        # Intramolecular O–H: parameters chosen so that the LJ minimum is at ~0.957 Å.
+                        params = {"epsilon": 6.36,
+                                  "sigma": 0.957 / (2 ** (1 / 6)),  # ~0.8527 Å
+                                  "cutoff": 10.0}  # Use a long cutoff so the force is always active
+                    else:
+                        # For intramolecular pairs that aren't O–H (like H–H), skip force calculation.
+                        continue
+                else:
+                    # Use standard intermolecular parameters for atoms in different molecules.
+                    species_key = tuple(sorted([bi.species, bj.species]))
+                    if species_key not in self.interaction_params:
+                        continue
+                    params = self.interaction_params[species_key]
+
+                # Calculate the displacement vector, accounting for periodic boundaries.
+                delta = bi.position - bj.position
+                delta -= box_lengths * np.round(delta / box_lengths)
+                r = np.linalg.norm(delta)
+                if r < 1e-8 or r > params["cutoff"]:
+                    continue
+                sr = params["sigma"] / r
+                sr6 = sr ** 6
+                sr12 = sr6 ** 2
+                # LJ force magnitude: derivative of the potential.
+                force_magnitude = 24 * params["epsilon"] * (2 * sr12 - sr6) / r
+                max_force = 50.0
+                force_magnitude = min(force_magnitude, max_force)
+                f_lj = force_magnitude * (delta / r)
+                # Newton's third law: apply equal and opposite forces.
+                bi.force += f_lj
+                bj.force -= f_lj
 
     def compute_system_temperature(self):
-        k_B = 0.0083144621
-        total_kinetic_energy = sum(
-            0.5 * ball.mass * np.dot(ball.velocity, ball.velocity)
-            for ball in self.balls
-        )
+        k_B = 0.0083144621  # Boltzmann constant in (kJ/mol)/K
+        total_kinetic_energy = sum(0.5 * ball.mass * np.dot(ball.velocity, ball.velocity)
+                                   for ball in self.balls)
         n = len(self.balls)
-        if n == 0:
-            return 0.0
-        return (2 / (3 * n * k_B)) * total_kinetic_energy
+        return (2 / (3 * n * k_B)) * total_kinetic_energy if n > 0 else 0.0
 
     def apply_velocity_rescaling(self, target_temperature=300):
         current_temperature = self.compute_system_temperature()
+        if current_temperature == 0:
+            return
         scaling_factor = np.sqrt(target_temperature / current_temperature)
         for ball in self.balls:
             ball.velocity *= scaling_factor
 
     def compute_potential_energy_data(self):
         """
-        Computes the potential energy data analytically and from the simulation.
-
-        1. Analytical curve: Predefined range of distances.
-        2. Simulation data: Based on particle positions in the system.
+        Computes analytical Lennard-Jones potential data (for plotting)
+        and collects a simulation-based energy data point (for O–O interactions).
         """
-        pair_key = ("O", "O")  # Focus on oxygen atoms for plotting
+        pair_key = ("O", "O")
         epsilon, sigma = self.interaction_params[pair_key]["epsilon"], self.interaction_params[pair_key]["sigma"]
-
-        # 1. Analytical Lennard-Jones potential over a range of distances
-        r_analytical = np.linspace(0.1, 3.0, 200)  # Define a range of distances in angstroms
+        r_analytical = np.linspace(0.1, 3.0, 200)
         lj_analytical = 4 * epsilon * ((sigma / r_analytical) ** 12 - (sigma / r_analytical) ** 6)
-
-        # Store analytical values for plotting later
         self.analytical_potential_energy_data = list(zip(r_analytical, lj_analytical))
 
-        # 2. Simulation-based Lennard-Jones potential (Oxygen-Oxygen only)
         oxygens = [b for b in self.balls if b.species == "O"]
         if len(oxygens) != 2:
-            return [], []
-
-        # Compute pairwise distance considering periodic boundary conditions
-        delta = oxygens[0].position - oxygens[1].position
+            return [], self.analytical_potential_energy_data
         box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
+        delta = oxygens[0].position - oxygens[1].position
         delta -= box_lengths * np.round(delta / box_lengths)
         r_simulated = np.linalg.norm(delta)
-
-        # Compute LJ potential from current simulation
         lj_simulated = 4 * epsilon * ((sigma / r_simulated) ** 12 - (sigma / r_simulated) ** 6)
         self.potential_energy_data.append((r_simulated, lj_simulated))
-
         return self.potential_energy_data, self.analytical_potential_energy_data
 
     def update(self, rescale_temperature=True, target_temperature=300, rescale_interval=50):
@@ -167,14 +176,14 @@ class Simulation:
             print("No balls in the simulation.")
             return
 
-        # Reset forces
+        # Reset forces on all balls
         for b in self.balls:
             b.force.fill(0)
 
-        # Compute intermolecular forces
-        self.compute_intermolecular_forces()
+        # Compute forces (both intra- and intermolecular)
+        self.compute_forces()
 
-        # Apply wall repulsion
+        # Add wall repulsion forces
         for b in self.balls:
             b.force += self.well.compute_wall_repulsion_force(b)
 
@@ -186,19 +195,19 @@ class Simulation:
             self.well.apply_pbc(b)
             b.update_path()
 
-        # Apply thermostat
+        # Optionally apply a simple thermostat
         if rescale_temperature and (self.current_step % rescale_interval == 0):
             self.apply_velocity_rescaling(target_temperature)
 
-        # Track temperature
+        # Log temperature
         temperature = self.compute_system_temperature()
         print(f"Step {self.current_step}, Temperature: {temperature:.2f} K")
         self.temperature_history.append(temperature)
 
-        self.current_step += 1
-
-        # Compute potential energy data for oxygen atoms
+        # Update potential energy data
         self.compute_potential_energy_data()
+
+        self.current_step += 1
 
     def run(self):
         current_time = 0.0

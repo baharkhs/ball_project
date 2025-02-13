@@ -21,6 +21,7 @@ class Well:
         Returns:
             None
         """
+
         # Apply PBC in the z-direction (top and bottom boundaries)
         if ball.position[2] > self.height:
             ball.position[2] -= self.height  # Wrap around to bottom

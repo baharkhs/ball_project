@@ -6,8 +6,12 @@
     },
     "simulation": {
       "total_time": 15.0,
-      "dt": 0.02,
-      "movement_type": "newtonian"
+      "dt": 0.00001,
+      "movement_type": "newtonian",
+      "bond_params": {
+        "bond_length": 0.957,
+        "intramolecular_epsilon": 6.36
+      }
     },
     "particles": {
       "oxygen_molecules": [
@@ -21,6 +25,33 @@
         }
       ],
       "custom_particles": []
+    },
+    "interaction_params": {
+      "Lennard-Jones": {
+        "O-O": {
+          "epsilon": 0.1521,
+          "sigma": 3.1507,
+          "cutoff": 10.0
+        },
+        "H-O": {
+          "epsilon": 0.0836,
+          "sigma": 1.700,
+          "cutoff": 10.0
+        },
+        "H-H": {
+          "epsilon": 0.0,
+          "sigma": 0.0,
+          "cutoff": 10.0
+        }
+      },
+      "Coulombic": {
+        "O": {
+          "charge": -0.834
+        },
+        "H": {
+          "charge": 0.417
+        }
+      }
     }
   }
 }
