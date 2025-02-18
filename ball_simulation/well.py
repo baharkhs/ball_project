@@ -1,6 +1,6 @@
 import numpy as np
 class Well:
-    def __init__(self, radius=5.0, height=10.0):
+    def __init__(self, radius=2.0, height=4.0):
         """
         Initializes the Well object representing a cylindrical space for particle movement.
 

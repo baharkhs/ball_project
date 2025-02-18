@@ -27,7 +27,6 @@ def load_simulation_config(config_path="config.json", mode="newtonian"):
 
     return config[mode]
 
-
 def setup_simulation(config):
     """
     Set up the simulation using the provided configuration.
@@ -54,7 +53,7 @@ def setup_simulation(config):
     )
     sim.set_movement_type(movement_type)
 
-    # Add water molecules (H2O)
+    # Add water molecules (each with one O and two H)
     oxygen_molecules = config["particles"].get("oxygen_molecules", [])
     for molecule in oxygen_molecules:
         center_position = molecule["center_position"]
@@ -76,7 +75,6 @@ def setup_simulation(config):
         )
 
     return sim
-
 
 def update_animation(frame, sim, ball_plots, temp_line, ax_temp):
     """
@@ -101,7 +99,6 @@ def update_animation(frame, sim, ball_plots, temp_line, ax_temp):
         ax_temp.set_ylim(0, max_temp + 50)
 
     return ball_plots + [temp_line]
-
 
 def run_simulation(config):
     """
@@ -162,7 +159,6 @@ def run_simulation(config):
 
     # 9) After the simulation finishes, plot potential energy
     if sim.potential_energy_data:
-        # Potential energy data is stored as (distance, potential) in sim.potential_energy_data
         distances, potential_energies = zip(*sim.potential_energy_data)
         plt.figure(figsize=(8, 6))
         plt.scatter(distances, potential_energies, color="blue", alpha=0.6)
@@ -174,10 +170,8 @@ def run_simulation(config):
     else:
         print("No potential energy data was collected in sim.potential_energy_data.")
 
-
     plotter = SimulationPlotter(sim)
     plotter.plot_all()
-
 
 def main():
     """
