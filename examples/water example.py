@@ -7,7 +7,7 @@ from ball_simulation.simulation import Simulation
 sim = Simulation(well_radius=5.0, well_height=5.0, total_time=5.0, dt=0.001)
 
 # Define a nonzero initial velocity in all directions.
-initial_velocity = [0.2, 0.2, 0.2]
+initial_velocity = [1.2, 1.2, 1.2]
 
 # Create one water molecule using create_water_molecule.
 # This creates one oxygen and two hydrogens, all sharing molecule_id "H2O".

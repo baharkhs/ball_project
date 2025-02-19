@@ -48,27 +48,35 @@ class Simulation:
         return len(self.balls) - 1
 
     def create_water_molecule(self, center_position, velocity=(0, 0, 0), molecule_id=None):
-        """
-        Creates one water molecule (1 O and 2 H) at the given center_position.
-        The O–H bond length is 0.957 Å. (Bond angle is ignored for simplicity.)
-        """
         bond_length = 0.957
-        # Create Oxygen.
-        iO = self.add_ball(mass=16.0, initial_position=center_position,
-                           initial_velocity=velocity, species="O", molecule_id=molecule_id)
-        # Create two Hydrogens with fixed offsets.
-        offset1 = np.array([bond_length * np.sin(np.radians(104.5) / 2),
-                            bond_length * np.cos(np.radians(104.5) / 2),
-                            0.1])
-        offset2 = np.array([-bond_length * np.sin(np.radians(104.5) / 2),
-                            bond_length * np.cos(np.radians(104.5) / 2),
-                            -0.1])
+        iO = self.add_ball(mass=16.0,
+                           initial_position=center_position,
+                           initial_velocity=velocity,
+                           species="O",
+                           molecule_id=molecule_id)
+        # Compute half-angle (104.5°/2) in radians.
+        half_angle = np.radians(104.5) / 2
+        # Use identical z offset (here 0.0 for a planar configuration)
+        offset1 = np.array([
+            bond_length * np.sin(half_angle),
+            bond_length * np.cos(half_angle),
+            0.0
+        ])
+        offset2 = np.array([
+            -bond_length * np.sin(half_angle),
+            bond_length * np.cos(half_angle),
+            0.0
+        ])
         iH1 = self.add_ball(mass=1.0,
                             initial_position=np.array(center_position) + offset1,
-                            initial_velocity=velocity, species="H", molecule_id=molecule_id)
+                            initial_velocity=velocity,
+                            species="H",
+                            molecule_id=molecule_id)
         iH2 = self.add_ball(mass=1.0,
                             initial_position=np.array(center_position) + offset2,
-                            initial_velocity=velocity, species="H", molecule_id=molecule_id)
+                            initial_velocity=velocity,
+                            species="H",
+                            molecule_id=molecule_id)
         self.molecules[molecule_id] = {"O": iO, "H1": iH1, "H2": iH2}
 
     def compute_forces(self):
@@ -189,39 +197,65 @@ class Simulation:
         self.potential_energy_data.append((r_simulated, lj_simulated))
         return self.potential_energy_data, self.analytical_potential_energy_data
 
-    def update(self, rescale_temperature=True, target_temperature=300, rescale_interval=100):
+    def update(self, rescale_temperature=True, target_temperature=300, rescale_interval=50):
         if not self.balls:
             print("No balls in the simulation.")
             return
 
-        if self.movement_type == "newtonian":
-            for b in self.balls:
-                b.force.fill(0)
-            self.compute_forces()
-            for b in self.balls:
-                b.force += self.well.compute_wall_repulsion_force(b)
-            for b in self.balls:
-                acceleration = b.force / b.mass
-                b.velocity += acceleration * self.dt
-                b.position += b.velocity * self.dt
-                self.well.apply_pbc(b)
-                b.update_path()
-            for i, ball in enumerate(self.balls):
-                if i not in self.paths:
-                    self.paths[i] = [ball.position.copy()]
-                else:
-                    self.paths[i].append(ball.position.copy())
-            if rescale_temperature and (self.current_step % rescale_interval == 0):
-                self.apply_velocity_rescaling(target_temperature)
-        elif self.movement_type == "monte_carlo":
-            self.perform_monte_carlo_move()
-        else:
-            raise ValueError(f"Unknown movement type: {self.movement_type}")
+        # --- Step 1: Compute forces at the current positions ---
+        for b in self.balls:
+            b.force.fill(0)
+        self.compute_forces()
+        for b in self.balls:
+            b.force += self.well.compute_wall_repulsion_force(b)
+        # Save current accelerations: a = F/m
+        current_accelerations = [b.force / b.mass for b in self.balls]
 
+        # --- Step 2: Update positions using Velocity Verlet ---
+        for b in self.balls:
+            # x(t + dt) = x(t) + v(t)*dt + 0.5*a(t)*dt^2
+            b.position += b.velocity * self.dt + 0.5 * current_accelerations[self.balls.index(b)] * self.dt ** 2
+            self.well.apply_pbc(b)
+            b.update_path()
+
+        # --- Step 3: Recompute forces at the new positions ---
+        for b in self.balls:
+            b.force.fill(0)
+        self.compute_forces()
+        for b in self.balls:
+            b.force += self.well.compute_wall_repulsion_force(b)
+        # Save new accelerations
+        new_accelerations = [b.force / b.mass for b in self.balls]
+
+        # --- Step 4: Update velocities using the average acceleration ---
+        for i, b in enumerate(self.balls):
+            # v(t+dt) = v(t) + 0.5*(a(t)+a(t+dt))*dt
+            b.velocity += 0.5 * (current_accelerations[i] + new_accelerations[i]) * self.dt
+
+        # --- Step 5: Record trajectories ---
+        for i, b in enumerate(self.balls):
+            if i not in self.paths:
+                self.paths[i] = [b.position.copy()]
+            else:
+                self.paths[i].append(b.position.copy())
+
+        # --- Step 6: Apply thermostat if enabled (velocity rescaling) ---
+        if rescale_temperature and (self.current_step % rescale_interval == 0):
+            self.apply_velocity_rescaling(target_temperature)
+
+        # --- Step 7: Logging: Compute & print temperature and bond distances ---
         temperature = self.compute_system_temperature()
+        for molecule_id, indices in self.molecules.items():
+            O_pos = self.balls[indices["O"]].position
+            H1_pos = self.balls[indices["H1"]].position
+            H2_pos = self.balls[indices["H2"]].position
+            d1 = np.linalg.norm(O_pos - H1_pos)
+            d2 = np.linalg.norm(O_pos - H2_pos)
+            print(f"Step {self.current_step}: O-H1 = {d1:.3f} Å, O-H2 = {d2:.3f} Å")
         print(f"Step {self.current_step}, Temperature: {temperature:.2f} K")
         self.temperature_history.append(temperature)
         self.compute_potential_energy_data()
+
         self.current_step += 1
 
     def run(self):
