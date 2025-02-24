@@ -16,8 +16,8 @@ class Ball:
         """
         self.mass = mass  # Mass in atomic mass units (amu).
         self.position = np.array(initial_position) if initial_position is not None else np.array([0.0, 0.0, 0.0])
-        self.velocity = np.array(initial_velocity, dtype=float) if initial_velocity is not None else np.array(
-            [0.5, 0.5, 0.5])
+        #self.velocity = np.array(initial_velocity, dtype=float) if initial_velocity is not None else np.array( [0.5, 0.5, 0.5])
+        self.velocity = np.zeros(3)
         self.initial_velocity = self.velocity.copy()
         self.path_segments = []
         self.current_path_segment = {"x": [], "y": [], "z": []}

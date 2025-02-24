@@ -4,7 +4,7 @@ import matplotlib.animation as animation
 from ball_simulation.simulation import Simulation
 
 # Create a simulation instance with a well large enough for visualization.
-sim = Simulation(well_radius=5.0, well_height=5.0, total_time=5.0, dt=0.001)
+sim = Simulation(well_radius=5.0, well_height=5.0, total_time=5.0, dt=0.01)
 
 # Define a nonzero initial velocity in all directions.
 initial_velocity = [1.2, 1.2, 1.2]

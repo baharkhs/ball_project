@@ -6,7 +6,7 @@ from ball_simulation.plotting import SimulationPlotter
 sim = Simulation(well_radius=2.0, well_height=2.0, total_time=5.0, dt=0.001)
 
 # Define a nonzero initial velocity.
-initial_velocity = [1.2, 1.2, 1.2]
+initial_velocity = [1.2, 1.2, 2.2]
 
 # Create one water molecule (1 O and 2 H) with molecule_id "H2O".
 sim.create_water_molecule(center_position=[0.0, 0.0, 1.5],
@@ -21,4 +21,4 @@ sim.create_water_molecule(center_position=[0.0, 0.0, 0.5],
 # Instantiate the plotter and run the animation and additional plots.
 plotter = SimulationPlotter(sim)
 plotter.animate_simulation()
-plotter.plot_all()
+

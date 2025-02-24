@@ -48,7 +48,12 @@ class Simulation:
         return len(self.balls) - 1
 
     def create_water_molecule(self, center_position, velocity=(0, 0, 0), molecule_id=None):
+        """
+        Creates one water molecule (1 O and 2 H) at the given center_position.
+        The O–H bond length is 0.957 Å (bond angle 104.5° is enforced via the angular potential).
+        """
         bond_length = 0.957
+        # Create Oxygen.
         iO = self.add_ball(mass=16.0,
                            initial_position=center_position,
                            initial_velocity=velocity,
@@ -56,7 +61,7 @@ class Simulation:
                            molecule_id=molecule_id)
         # Compute half-angle (104.5°/2) in radians.
         half_angle = np.radians(104.5) / 2
-        # Use identical z offset (here 0.0 for a planar configuration)
+        # Use identical z offset (0.0 for a planar configuration).
         offset1 = np.array([
             bond_length * np.sin(half_angle),
             bond_length * np.cos(half_angle),
@@ -81,42 +86,99 @@ class Simulation:
 
     def compute_forces(self):
         """
-        Computes forces between all pairs using Lennard-Jones potentials.
-        For atoms in the same water molecule (intramolecular), uses stiff parameters to glue O and H together.
-        (No angular force is applied.)
+        Computes forces between all pairs. For intramolecular O-H bonds, uses a harmonic potential to maintain bond length.
+        For intermolecular interactions, uses Lennard-Jones potentials.
         """
         num_balls = len(self.balls)
         box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
+
+        # Reset forces to zero before computing new forces
+        for ball in self.balls:
+            ball.force.fill(0)
+
+        # Compute pairwise forces
         for i in range(num_balls):
             for j in range(i + 1, num_balls):
                 bi = self.balls[i]
                 bj = self.balls[j]
-                if bi.molecule_id is not None and bj.molecule_id is not None and (bi.molecule_id == bj.molecule_id):
+
+                # Determine if the pair is part of the same molecule (intramolecular)
+                if (bi.molecule_id is not None and bj.molecule_id is not None and
+                        bi.molecule_id == bj.molecule_id):
+                    # Handle intramolecular O-H bonds with harmonic potential
                     if set([bi.species, bj.species]) == set(["O", "H"]):
-                        params = {"epsilon": 6.36,
-                                  "sigma": 0.957 / (2 ** (1 / 6)),
-                                  "cutoff": 10.0}
+                        k_bond = 450.0  # Spring constant in kJ/(mol·Å²)
+                        r0 = 0.957  # Equilibrium bond length in Å
+                        delta = bi.position - bj.position
+                        # Apply periodic boundary conditions to the distance
+                        delta -= box_lengths * np.round(delta / box_lengths)
+                        r = np.linalg.norm(delta)
+                        if r < 1e-12:  # Avoid division by zero
+                            continue
+                        force_magnitude = -k_bond * (r - r0)  # Harmonic force: F = -k * (r - r0)
+                        f_bond = force_magnitude * (delta / r)  # Force direction along the bond
+                        bi.force += f_bond
+                        bj.force -= f_bond
+                    # Skip H-H interactions within the same molecule (no direct bond)
                     else:
                         continue
+                # Handle intermolecular interactions with Lennard-Jones potential
                 else:
                     species_key = tuple(sorted([bi.species, bj.species]))
                     if species_key not in self.interaction_params:
                         continue
                     params = self.interaction_params[species_key]
-                delta = bi.position - bj.position
-                delta -= box_lengths * np.round(delta / box_lengths)
-                r = np.linalg.norm(delta)
-                if r < 1e-8 or r > params["cutoff"]:
-                    continue
-                sr = params["sigma"] / r
-                sr6 = sr ** 6
-                sr12 = sr6 ** 2
-                force_magnitude = 24 * params["epsilon"] * (2 * sr12 - sr6) / r
-                max_force = 50.0
-                force_magnitude = min(force_magnitude, max_force)
-                f_lj = force_magnitude * (delta / r)
-                bi.force += f_lj
-                bj.force -= f_lj
+                    delta = bi.position - bj.position
+                    # Apply periodic boundary conditions
+                    delta -= box_lengths * np.round(delta / box_lengths)
+                    r = np.linalg.norm(delta)
+                    if r < 1e-12 or r > params["cutoff"]:  # Avoid division by zero or beyond cutoff
+                        continue
+                    sr = params["sigma"] / r
+                    sr6 = sr ** 6
+                    sr12 = sr6 ** 2
+                    force_magnitude = 24 * params["epsilon"] * (2 * sr12 - sr6) / r
+                    max_force = 50.0  # Cap force for numerical stability
+                    force_magnitude = min(force_magnitude, max_force)
+                    f_lj = force_magnitude * (delta / r)
+                    bi.force += f_lj
+                    bj.force -= f_lj
+
+    def compute_angular_forces(self, k_angle=500.0, theta_target=np.radians(104.5)):
+        """
+        Computes and applies angular forces for each water molecule to maintain the H–O–H angle.
+        The angular potential is defined as:
+            U_angle = 1/2 * k_angle * (theta - theta_target)**2,
+        where theta is the current H–O–H angle.
+        A simplified force distribution is applied:
+          - Each hydrogen receives half the restoring force along its bond,
+          - The oxygen receives the negative sum of those forces.
+        """
+        for molecule_id, indices in self.molecules.items():
+            O = self.balls[indices["O"]]
+            H1 = self.balls[indices["H1"]]
+            H2 = self.balls[indices["H2"]]
+            r1 = H1.position - O.position  # O->H1
+            r2 = H2.position - O.position  # O->H2
+            norm_r1 = np.linalg.norm(r1)
+            norm_r2 = np.linalg.norm(r2)
+            if norm_r1 < 1e-12 or norm_r2 < 1e-12:
+                continue
+            cos_theta = np.dot(r1, r2) / (norm_r1 * norm_r2)
+            cos_theta = np.clip(cos_theta, -1.0, 1.0)
+            theta = np.arccos(cos_theta)
+            delta_theta = theta - theta_target
+            # Magnitude of the angular force
+            force_magnitude = -k_angle * delta_theta
+            # Perpendicular components for force direction
+            u1 = r1 / norm_r1
+            u2 = r2 / norm_r2
+            f_H1 = force_magnitude * (u2 - cos_theta * u1) / norm_r1
+            f_H2 = force_magnitude * (u1 - cos_theta * u2) / norm_r2
+            f_O = -(f_H1 + f_H2)
+            H1.force += f_H1
+            H2.force += f_H2
+            O.force += f_O
 
     def compute_total_potential_energy(self):
         """
@@ -208,13 +270,12 @@ class Simulation:
         self.compute_forces()
         for b in self.balls:
             b.force += self.well.compute_wall_repulsion_force(b)
-        # Save current accelerations: a = F/m
+        # Save current accelerations.
         current_accelerations = [b.force / b.mass for b in self.balls]
 
         # --- Step 2: Update positions using Velocity Verlet ---
-        for b in self.balls:
-            # x(t + dt) = x(t) + v(t)*dt + 0.5*a(t)*dt^2
-            b.position += b.velocity * self.dt + 0.5 * current_accelerations[self.balls.index(b)] * self.dt ** 2
+        for i, b in enumerate(self.balls):
+            b.position += b.velocity * self.dt + 0.5 * current_accelerations[i] * self.dt ** 2
             self.well.apply_pbc(b)
             b.update_path()
 
@@ -224,26 +285,27 @@ class Simulation:
         self.compute_forces()
         for b in self.balls:
             b.force += self.well.compute_wall_repulsion_force(b)
-        # Save new accelerations
         new_accelerations = [b.force / b.mass for b in self.balls]
 
         # --- Step 4: Update velocities using the average acceleration ---
         for i, b in enumerate(self.balls):
-            # v(t+dt) = v(t) + 0.5*(a(t)+a(t+dt))*dt
             b.velocity += 0.5 * (current_accelerations[i] + new_accelerations[i]) * self.dt
 
-        # --- Step 5: Record trajectories ---
+        # --- Step 5: Apply angular forces to maintain the H–O–H angle ---
+        self.compute_angular_forces()
+
+        # --- Step 6: Record trajectories ---
         for i, b in enumerate(self.balls):
             if i not in self.paths:
                 self.paths[i] = [b.position.copy()]
             else:
                 self.paths[i].append(b.position.copy())
 
-        # --- Step 6: Apply thermostat if enabled (velocity rescaling) ---
+        # --- Step 7: Thermostat: Apply velocity rescaling if enabled ---
         if rescale_temperature and (self.current_step % rescale_interval == 0):
             self.apply_velocity_rescaling(target_temperature)
 
-        # --- Step 7: Logging: Compute & print temperature and bond distances ---
+        # --- Step 8: Logging: Print temperature and bond distances ---
         temperature = self.compute_system_temperature()
         for molecule_id, indices in self.molecules.items():
             O_pos = self.balls[indices["O"]].position
@@ -255,7 +317,6 @@ class Simulation:
         print(f"Step {self.current_step}, Temperature: {temperature:.2f} K")
         self.temperature_history.append(temperature)
         self.compute_potential_energy_data()
-
         self.current_step += 1
 
     def run(self):
@@ -266,20 +327,6 @@ class Simulation:
 
     @classmethod
     def from_config(cls, config, args=None):
-        """
-        Creates a Simulation instance from a configuration dictionary.
-        Optionally, command-line arguments (args) can override settings.
-        Expected config structure:
-            {
-              "well": {"radius": <value>, "height": <value>},
-              "simulation": {"total_time": <value>, "dt": <value>, "movement_type": "<type>", "initial_velocity": [vx,vy,vz]},
-              "particles": {
-                 "oxygen_molecules": [{"center_position": [...], "molecule_id": <id>}, ...],
-                 "custom_particles": [ ... ]
-              }
-            }
-        If args provides overrides (like args.vel), they will be applied.
-        """
         well_radius = config["well"]["radius"]
         well_height = config["well"]["height"]
         total_time = config["simulation"]["total_time"]
@@ -287,7 +334,6 @@ class Simulation:
         movement_type = config["simulation"]["movement_type"]
         sim = cls(well_radius, well_height, total_time, dt, movement_type)
         sim.set_movement_type(movement_type)
-        # Determine initial velocity.
         initial_velocity = config["simulation"].get("initial_velocity", [0.2, 0.2, 0.2])
         if args and hasattr(args, "vel") and args.vel:
             initial_velocity = [float(x) for x in args.vel.split(',')]
