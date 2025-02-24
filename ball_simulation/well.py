@@ -1,4 +1,5 @@
 import numpy as np
+
 class Well:
     def __init__(self, radius=2.0, height=4.0):
         """
@@ -13,68 +14,79 @@ class Well:
 
     def apply_pbc(self, ball):
         """
-        Applies periodic boundary conditions (PBC) for the particle at the cylindrical x-y boundary and z-boundaries.
+        Applies periodic boundary conditions (PBC) only in the z-direction.
 
         Args:
-            ball (Ball): The Ball object whose position will be adjusted to apply PBC.
-
-        Returns:
-            None
+            ball (Ball): The Ball object whose position will be adjusted.
         """
-
-        # Apply PBC in the z-direction (top and bottom boundaries)
+        # PBC in z-direction only (top and bottom boundaries)
         if ball.position[2] > self.height:
             ball.position[2] -= self.height  # Wrap around to bottom
         elif ball.position[2] < 0:
             ball.position[2] += self.height  # Wrap around to top
 
-        # Apply PBC in the cylindrical x-y plane
-        distance_from_center = np.linalg.norm(ball.position[:2])
-        if distance_from_center > self.radius:  # Project back into the cylindrical boundary
-            theta = np.arctan2(ball.position[1], ball.position[0])  # Compute angle
-            ball.position[0] = self.radius * np.cos(theta)
-            ball.position[1] = self.radius * np.sin(theta)
-
-    def compute_wall_repulsion_force(self, ball, repulsion_constant=50.0, wall_decay_length=0.2):
+    def apply_pbc_com(self, position, height, radius):
         """
-        Computes a soft repulsive force near the cylindrical and z-boundaries of the well.
+        Applies PBC in z-direction and enforces a hard cylindrical boundary in x-y.
+
+        Args:
+            position (np.array): The COM position to adjust.
+            height (float): Well height for z-PBC.
+            radius (float): Well radius for x-y boundary.
+        """
+        # PBC in z-direction
+        if position[2] > height:
+            position[2] -= height
+        elif position[2] < 0:
+            position[2] += height
+
+        # Enforce hard cylindrical boundary in x-y
+        r_xy = np.linalg.norm(position[:2])
+        if r_xy > radius:
+            theta = np.arctan2(position[1], position[0])
+            position[0] = radius * np.cos(theta)
+            position[1] = radius * np.sin(theta)
+
+    def compute_wall_repulsion_force(self, ball, repulsion_constant=500.0, wall_decay_length=0.05):
+        """
+        Computes a strong repulsive force near the cylindrical wall.
 
         Args:
             ball (Ball): The Ball object to compute forces for.
-            repulsion_constant (float): Strength of the repulsion force.
-            wall_decay_length (float): Decay length controlling force range.
-
-        Returns:
-            np.array: The repulsion force vector acting on the ball.
+            repulsion_constant (float): Strength of the repulsion force (increased).
+            wall_decay_length (float): Decay length controlling force range (sharper).
         """
         force = np.zeros(3)
-
-        # Repulsion from cylindrical x-y boundary
-        distance_from_center = np.linalg.norm(ball.position[:2])
-        if distance_from_center > self.radius - wall_decay_length:  # Near boundary
-            overlap = distance_from_center - (self.radius - wall_decay_length)
+        r_xy = np.linalg.norm(ball.position[:2])
+        if r_xy > self.radius - wall_decay_length:
+            overlap = r_xy - (self.radius - wall_decay_length)
             if overlap > 0:
-                normal_direction = ball.position[:2] / distance_from_center
+                normal_direction = ball.position[:2] / r_xy
                 force[:2] = -repulsion_constant * np.exp(-overlap / wall_decay_length) * normal_direction
+        return force
 
-        # Repulsion from bottom z-boundary
-        #if ball.position[2] < wall_decay_length:  # Near bottom wall
-         #   overlap = wall_decay_length - ball.position[2]
-          #  force[2] += repulsion_constant * np.exp(-overlap / wall_decay_length)
+    def compute_wall_repulsion_force_com(self, position, repulsion_constant=500.0, wall_decay_length=0.05):
+        """
+        Computes strong wall repulsion force based on COM position.
 
-        # Repulsion from top z-boundary
-        #if ball.position[2] > self.height - wall_decay_length:  # Near top wall
-         #   overlap = ball.position[2] - (self.height - wall_decay_length)
-          #  force[2] -= repulsion_constant * np.exp(-overlap / wall_decay_length)
-
+        Args:
+            position (np.array): The COM position.
+            repulsion_constant (float): Strength of the repulsion force.
+            wall_decay_length (float): Decay length controlling force range.
+        """
+        force = np.zeros(3)
+        r_xy = np.linalg.norm(position[:2])
+        if r_xy > self.radius - wall_decay_length:
+            overlap = r_xy - (self.radius - wall_decay_length)
+            if overlap > 0:
+                normal_direction = position[:2] / r_xy
+                force_magnitude = repulsion_constant * np.exp(-overlap / wall_decay_length)
+                force[:2] = -force_magnitude * normal_direction
         return force
 
     def plot_boundary(self, ax):
         """
         Draws the cylindrical boundary of the well for visualization.
-
-        Args:
-            ax (Axes3D): Matplotlib 3D axis to plot the well boundary.
         """
         theta = np.linspace(0, 2 * np.pi, 100)
         z = np.linspace(0, self.height, 50)
