@@ -2,35 +2,30 @@ import matplotlib.pyplot as plt
 from ball_simulation.simulation import Simulation
 from ball_simulation.plotting import SimulationPlotter
 
-# # Create a simulation instance (a well large enough for visualization).
-sim = Simulation(well_radius=2.0, well_height=2.0, total_time=5.0, dt=0.001)
+# Create a simulation instance (larger well for visibility).
+sim = Simulation(well_radius=5.0, well_height=2.0, total_time=5.0, dt=0.001)
 
-# Define a nonzero initial velocity.
-initial_velocity = [3.2, 3.2, 3.2]
+# Define a reasonable initial velocity for 300 K.
+initial_velocity = [0.3, 0.3, 0.3]
 
-# Create one water molecule (1 O and 2 H) with molecule_id "H2O".
-sim.create_water_molecule(O_position=[0.0, 0.0, 1.5],
-                          velocity=initial_velocity,
-                          molecule_id="H2O")
+# Create one water molecule with custom z-positions for O, H1, and H2.
+sim.create_water_molecule(
+    O_position=[0.0, 0.0, 1.5],  # Oxygen at z = 1.5
+    H1_z=1.7,  # H1 at z = 1.7 (higher than O)
+    H2_z=1.3,  # H2 at z = 1.3 (lower than O)
+    velocity=initial_velocity,
+    molecule_id="H2O"
+)
 
-# Create a second water molecule.
-sim.create_water_molecule(O_position=[0.0, 0.0, 0.5],
-                          velocity=initial_velocity,
-                          molecule_id="H2O2")
+# Create a second water molecule with custom z-positions.
+sim.create_water_molecule(
+    O_position=[0.0, 0.0, 0.5],  # Oxygen at z = 0.5
+    H1_z=0.6,  # H1 at z = 0.7
+    H2_z=0.3,  # H2 at z = 0.3
+    velocity=initial_velocity,
+    molecule_id="H2O2"
+)
 
-# Instantiate the plotter and run the animation and additional plots.
+# Instantiate the plotter and run the animation.
 plotter = SimulationPlotter(sim)
 plotter.animate_simulation()
-#
-# sim = Simulation(well_radius=2.0, well_height=2.0, total_time=5.0, dt=0.001)
-# initial_velocity = [3.2, 3.2, 3.2]
-# sim.create_water_molecule(
-#     O_position=[0.0, 0.0, 1.5],
-#     H1_position=[0.4785, 0.8285, 1.6],  # Custom z = 1.6
-#     H2_position=[-0.4785, 0.8285, 1.4], # Custom z = 1.4
-#     velocity=initial_velocity,
-#     molecule_id="H2O"
-# )
-# sim.create_water_molecule(O_position=[0.0, 0.0, 0.5], velocity=initial_velocity, molecule_id="H2O2")
-# plotter = SimulationPlotter(sim)
-# plotter.animate_simulation()

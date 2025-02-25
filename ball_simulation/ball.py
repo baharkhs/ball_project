@@ -1,12 +1,13 @@
 import numpy as np
+
 class Ball:
-    def __init__(self, mass=None, initial_position=None, initial_velocity=None, species="O", molecule_id=None,
+    def __init__(self, mass=1.0, initial_position=None, initial_velocity=None, species="O", molecule_id=None,
                  color=None, size=None):
         """
         Represents a single particle with mass, position, velocity, and attributes.
 
         Args:
-            mass (float): Mass of the particle in atomic mass units (amu).
+            mass (float): Mass of the particle in atomic mass units (amu). Defaults to 1.0 for H.
             initial_position (array-like): Initial [x, y, z] position in angstroms.
             initial_velocity (array-like): Initial [vx, vy, vz] velocity in angstroms per femtosecond (fs).
             species (str): Type of particle ("H" for Hydrogen, "O" for Oxygen).
@@ -14,10 +15,9 @@ class Ball:
             color (str): Visualization color (optional).
             size (float): Visualization size (optional).
         """
-        self.mass = mass  # Mass in atomic mass units (amu).
+        self.mass = mass  # Mass in atomic mass units (amu), default to 1.0 for H
         self.position = np.array(initial_position) if initial_position is not None else np.array([0.0, 0.0, 0.0])
-        #self.velocity = np.array(initial_velocity, dtype=float) if initial_velocity is not None else np.array( [0.5, 0.5, 0.5])
-        self.velocity = np.zeros(3)
+        self.velocity = np.array(initial_velocity, dtype=float) if initial_velocity is not None else np.array([0.5, 0.5, 0.5])  # Default to [0.5, 0.5, 0.5]
         self.initial_velocity = self.velocity.copy()
         self.path_segments = []
         self.current_path_segment = {"x": [], "y": [], "z": []}
@@ -37,11 +37,9 @@ class Ball:
         # Assign default size with overrides
         self.size = size if size else (10 if species == "O" else 6 if species == "H" else 8)
 
-        # Assign correct mass based on species
-        if mass is None:
+        # Override mass based on species if not explicitly set
+        if mass is None or mass == 1.0:  # Only override if mass is default or None
             self.mass = 16.0 if species == "O" else 1.0  # Default mass for O and H
-        else:
-            self.mass = mass
 
     def compute_interaction_force(self, other, interaction_params, box_lengths):
         """
@@ -63,7 +61,6 @@ class Ball:
         delta = self.position - other.position
         delta -= box_lengths * np.round(delta / box_lengths)  # PBC adjustment
         r = np.linalg.norm(delta)
-
 
         r_min = 0.8 * sigma
         if r < r_min:
@@ -88,7 +85,6 @@ class Ball:
         Computes the Coulombic force between two charged particles.
         """
         k_e = 1389.35  # Coulomb constant in (kJ/mol·Å·e^2), correct for distances in Å
-
 
         # Compute displacement with PBC
         delta = self.position - other.position
@@ -145,7 +141,6 @@ class Ball:
         # Bond force (Hooke's law)
         bond_force = -k_bond * (r - bond_length) * (delta / r)
 
-
         return bond_force
 
     def update_velocity_position(self, dt):
@@ -170,11 +165,7 @@ class Ball:
             self.current_path_segment = {"x": [], "y": [], "z": []}
             self.skip_path_update = False  # Reset the flag for future updates.
         else:
-            # Skip recording the path if the ball is exactly at the PBC boundary.
-            if self.position[2] == 0 or self.position[2] == self.radius:
-                return
-
-            # Otherwise, update the ongoing path segment.
+            # For testing, always record the position, ignoring PBC boundary checks
             self.current_path_segment["x"].append(self.position[0])
             self.current_path_segment["y"].append(self.position[1])
             self.current_path_segment["z"].append(self.position[2])
@@ -241,3 +232,20 @@ class Ball:
         sr12 = sr6 ** 2
         force_magnitude = 24 * epsilon * (2 * sr12 - sr6) / r
         return force_magnitude
+
+if __name__ == '__main__':
+    # Example usage of Ball class
+    ball = Ball(mass=1.0, initial_position=[0.0, 0.0, 0.0], initial_velocity=[0.5, 0.5, 0.5],
+                species="H", molecule_id="test", color="blue", size=6)
+    print(f"Ball initialized with position: {ball.position}, velocity: {ball.velocity}, "
+          f"species: {ball.species}, charge: {ball.charge}")
+    # Test LJ potential and force
+    epsilon, sigma = 0.05, 2.0
+    r = 2.0
+    potential = ball.lennard_jones_potential(r, epsilon, sigma)
+    force = ball.lennard_jones_force(r, epsilon, sigma)
+    print(f"LJ Potential at r={r} Å: {potential:.6f}")
+    print(f"LJ Force at r={r} Å: {force:.6f}")
+    # Test path tracking
+    ball.update_path()
+    print(f"Path segment: {ball.current_path_segment}")

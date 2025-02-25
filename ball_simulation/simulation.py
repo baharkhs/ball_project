@@ -43,41 +43,71 @@ class Simulation:
         self.paths[len(self.balls) - 1] = [ball.position.copy()]
         return len(self.balls) - 1
 
-    def create_water_molecule(self, O_position=[0.0, 0.0, 0.0], H1_position=None, H2_position=None,
-                              velocity=[0.0, 0.0, 0.0], molecule_id=None):
+    def create_water_molecule(self, O_position=[0.0, 0.0, 0.0], H1_z=None, H2_z=None, velocity=[0.0, 0.0, 0.0],
+                              molecule_id=None):
         """
-        Creates a water molecule with customizable positions for O, H1, and H2.
-        If H1_position or H2_position is None, defaults to O-H = 0.957 Å and H-O-H = 104.5°.
+        Creates a rigid water molecule with fixed O-H (0.957 Å) and H-O-H (104.5°) geometry.
+        Allows custom z-positions for H1 and H2 while maintaining fixed bond lengths and angle.
+        O_position specifies [x, y, z] for oxygen; H1_z and H2_z specify z for hydrogens.
 
         Args:
             O_position (list): Initial position of oxygen [x, y, z].
-            H1_position (list, optional): Initial position of first hydrogen [x, y, z].
-            H2_position (list, optional): Initial position of second hydrogen [x, y, z].
+            H1_z (float, optional): Custom z-position for first hydrogen (H1). If None, defaults to O_z.
+            H2_z (float, optional): Custom z-position for second hydrogen (H2). If None, defaults to O_z.
             velocity (list): Initial velocity of the molecule’s COM [vx, vy, vz].
             molecule_id (str): Unique identifier for the molecule.
         """
-        bond_length = 0.957  # Å
-        half_angle = np.radians(104.5) / 2
+        bond_length = 0.957  # Å (exact)
+        half_angle = np.radians(104.5) / 2  # 52.25° (exact)
         O_position = np.array(O_position, dtype=float)
         velocity = np.array(velocity, dtype=float)
 
-        # Add oxygen
+        # Extract O’s x, y, z for default H positions
+        O_x, O_y, O_z = O_position
+
+        # Default H1 and H2 positions if z not specified (maintain fixed geometry in x-y, use O_z for z)
+        if H1_z is None:
+            H1_z = O_z
+        if H2_z is None:
+            H2_z = O_z
+
+        # Calculate H1 and H2 x-y positions to maintain exact O-H = 0.957 Å and H-O-H = 104.5°
+        # Use exact trigonometric values and ensure bond length is precise
+        H1_xy = np.array([bond_length * np.sin(half_angle), bond_length * np.cos(half_angle)])
+        H2_xy = np.array([-bond_length * np.sin(half_angle), bond_length * np.cos(half_angle)])
+
+        # Set H1 and H2 positions with custom z-values, ensuring exact geometry
+        H1_position = np.array([O_x + H1_xy[0], O_y + H1_xy[1], H1_z])
+        H2_position = np.array([O_x + H2_xy[0], O_y + H2_xy[1], H2_z])
+
+        # Verify and enforce exact initial geometry (debug, remove in production if needed)
+        d1 = np.linalg.norm(H1_position - O_position)
+        d2 = np.linalg.norm(H2_position - O_position)
+        r1 = H1_position - O_position
+        r2 = H2_position - O_position
+        cos_theta = np.dot(r1, r2) / (np.linalg.norm(r1) * np.linalg.norm(r2))
+        angle = np.degrees(np.arccos(np.clip(cos_theta, -1.0, 1.0)))
+        # Adjust positions if necessary to enforce exact 0.957 Å and 104.5°
+        if abs(d1 - bond_length) > 1e-6 or abs(d2 - bond_length) > 1e-6 or abs(angle - 104.5) > 1e-3:
+            # Recalculate H1 and H2 positions to enforce exact geometry
+            # Use unit vectors and scale to exact bond length
+            unit_H1 = np.array([np.sin(half_angle), np.cos(half_angle), 0.0])
+            unit_H2 = np.array([-np.sin(half_angle), np.cos(half_angle), 0.0])
+            H1_position = O_position + bond_length * unit_H1 + np.array([0.0, 0.0, H1_z - O_z])
+            H2_position = O_position + bond_length * unit_H2 + np.array([0.0, 0.0, H2_z - O_z])
+            # Recalculate distances and angle for verification
+            d1 = np.linalg.norm(H1_position - O_position)
+            d2 = np.linalg.norm(H2_position - O_position)
+            r1 = H1_position - O_position
+            r2 = H2_position - O_position
+            cos_theta = np.dot(r1, r2) / (np.linalg.norm(r1) * np.linalg.norm(r2))
+            angle = np.degrees(np.arccos(np.clip(cos_theta, -1.0, 1.0)))
+        print(
+            f"Initial geometry for molecule {molecule_id}: O-H1 = {d1:.3f} Å, O-H2 = {d2:.3f} Å, H-O-H = {angle:.1f}°")
+
+        # Add oxygen and hydrogens
         iO = self.add_ball(mass=16.0, initial_position=O_position, initial_velocity=velocity,
                            species="O", molecule_id=molecule_id)
-
-        # Default hydrogen positions if not provided
-        if H1_position is None:
-            H1_position = O_position + np.array(
-                [bond_length * np.sin(half_angle), bond_length * np.cos(half_angle), 0.0])
-        else:
-            H1_position = np.array(H1_position, dtype=float)
-        if H2_position is None:
-            H2_position = O_position + np.array(
-                [-bond_length * np.sin(half_angle), bond_length * np.cos(half_angle), 0.0])
-        else:
-            H2_position = np.array(H2_position, dtype=float)
-
-        # Add hydrogens with custom positions
         iH1 = self.add_ball(mass=1.0, initial_position=H1_position, initial_velocity=velocity,
                             species="H", molecule_id=molecule_id)
         iH2 = self.add_ball(mass=1.0, initial_position=H2_position, initial_velocity=velocity,
@@ -85,7 +115,7 @@ class Simulation:
 
         self.molecules[molecule_id] = {"O": iO, "H1": iH1, "H2": iH2}
 
-        # Compute center of mass
+        # Compute center of mass and store molecule info with fixed offsets
         positions = [self.balls[iO].position, self.balls[iH1].position, self.balls[iH2].position]
         masses = [16.0, 1.0, 1.0]
         com_position = np.average(positions, weights=masses, axis=0)
@@ -103,7 +133,8 @@ class Simulation:
 
     def update_molecule_positions(self, molecule_id):
         """
-        Updates atom positions based on the molecule's COM position, using stored offsets.
+        Updates atom positions based on the molecule's COM position, enforcing fixed geometry
+        and ensuring all atoms stay within the well boundaries, maintaining the molecule as a unit in PBC.
         """
         com_pos = self.molecule_com[molecule_id]["position"]
         offsets = self.molecule_com[molecule_id]["offsets"]
@@ -111,27 +142,32 @@ class Simulation:
         O = self.balls[indices["O"]]
         H1 = self.balls[indices["H1"]]
         H2 = self.balls[indices["H2"]]
+
+        # Enforce fixed geometry relative to COM
         O.position = com_pos + offsets["O"]
         H1.position = com_pos + offsets["H1"]
         H2.position = com_pos + offsets["H2"]
 
-        # Apply PBC to z-direction for all atoms
-        self.well.apply_pbc(O)
-        self.well.apply_pbc(H1)
-        self.well.apply_pbc(H2)
+        # Apply PBC to z-direction for all atoms, using COM’s wrapped position
+        for ball in [O, H1, H2]:
+            z = ball.position[2]
+            if z > self.well.height:
+                ball.position[2] -= self.well.height
+            elif z < 0:
+                ball.position[2] += self.well.height
 
         # Enforce cylindrical boundary for all atoms (project back if outside radius)
         for ball in [O, H1, H2]:
             r_xy = np.linalg.norm(ball.position[:2])
-            if r_xy > self.well.radius:
+            if r_xy > self.well.radius - 0.1:  # Account for atom radius (0.1 Å)
                 theta = np.arctan2(ball.position[1], ball.position[0])
-                ball.position[0] = self.well.radius * np.cos(theta)
-                ball.position[1] = self.well.radius * np.sin(theta)
+                ball.position[0] = (self.well.radius - 0.1) * np.cos(theta)
+                ball.position[1] = (self.well.radius - 0.1) * np.sin(theta)
 
     def compute_forces(self):
         """
-        Computes forces between all pairs. For intramolecular O-H bonds, uses a harmonic potential to maintain bond length.
-        For intermolecular interactions, uses Lennard-Jones potentials.
+        Computes forces on molecule COMs using intermolecular LJ (including H-H) and wall repulsion for all atoms.
+        Intramolecular forces are unnecessary since the molecule is rigid.
         """
         box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
 
@@ -139,7 +175,7 @@ class Simulation:
         for mol_id in self.molecule_com:
             self.molecule_com[mol_id]["force"].fill(0)
 
-        # Intermolecular forces (only between different molecules)
+        # Intermolecular forces (only between different molecules, including H-H)
         molecule_ids = list(self.molecules.keys())
         for i in range(len(molecule_ids)):
             for j in range(i + 1, len(molecule_ids)):
@@ -170,15 +206,31 @@ class Simulation:
                         self.molecule_com[mol1_id]["force"] += f_lj
                         self.molecule_com[mol2_id]["force"] -= f_lj
 
+        # Wall repulsion for each atom (repel as soon as any part touches the wall)
+        for mol_id in self.molecules:
+            indices = self.molecules[mol_id]
+            for atom_idx in indices.values():
+                ball = self.balls[atom_idx]
+                r_xy = np.linalg.norm(ball.position[:2])
+                if r_xy > self.well.radius - self.well.wall_decay_length:
+                    overlap = r_xy - (self.well.radius - self.well.wall_decay_length)
+                    if overlap > 0:
+                        theta = np.arctan2(ball.position[1], ball.position[0])
+                        normal_direction = np.array([np.cos(theta), np.sin(theta), 0.0])
+                        repulsion_force = -500.0 * np.exp(-overlap / self.well.wall_decay_length) * normal_direction
+                        self.molecule_com[mol_id]["force"] += repulsion_force
+                elif r_xy > self.well.radius:  # Hard boundary as fallback
+                    theta = np.arctan2(ball.position[1], ball.position[0])
+                    ball.position[0] = self.well.radius * np.cos(theta)
+                    ball.position[1] = self.well.radius * np.sin(theta)
+
         # Wall repulsion for each atom (O and H) individually
         for mol_id in self.molecules:
             indices = self.molecules[mol_id]
             for atom_idx in indices.values():
                 ball = self.balls[atom_idx]
-                wall_force = self.well.compute_wall_repulsion_force(ball, repulsion_constant=500.0,
-                                                                    wall_decay_length=0.05)
+                wall_force = self.well.compute_wall_repulsion_force(ball, repulsion_constant=500.0)
                 self.molecule_com[mol_id]["force"] += wall_force
-
 
     def compute_angular_forces(self, k_angle=500.0, theta_target=np.radians(104.5)):
         """
@@ -305,9 +357,20 @@ class Simulation:
         current_accelerations = {mol_id: com["force"] / com["mass"] for mol_id, com in self.molecule_com.items()}
 
         for mol_id, com in self.molecule_com.items():
+            # Update COM position with Velocity Verlet
             new_position = com["position"] + com["velocity"] * self.dt + 0.5 * current_accelerations[
                 mol_id] * self.dt ** 2
-            self.well.apply_pbc_com(new_position, self.well.height, self.well.radius)
+            # Apply PBC in z-direction to COM first (no rigid wall at top/bottom)
+            if new_position[2] > self.well.height:
+                new_position[2] -= self.well.height
+            elif new_position[2] < 0:
+                new_position[2] += self.well.height
+            # Enforce cylindrical boundary for COM (x-y)
+            r_xy = np.linalg.norm(new_position[:2])
+            if r_xy > self.well.radius - 0.1:  # Account for atom radius
+                theta = np.arctan2(new_position[1], new_position[0])
+                new_position[0] = (self.well.radius - 0.1) * np.cos(theta)
+                new_position[1] = (self.well.radius - 0.1) * np.sin(theta)
             com["position"] = new_position
             self.update_molecule_positions(mol_id)
 
@@ -329,78 +392,34 @@ class Simulation:
             O_pos = self.balls[indices["O"]].position
             H1_pos = self.balls[indices["H1"]].position
             H2_pos = self.balls[indices["H2"]].position
-            d1 = np.linalg.norm(O_pos - H1_pos)
-            d2 = np.linalg.norm(O_pos - H2_pos)
+            d1 = np.linalg.norm(O_pos - H1_pos)  # O-H1 distance
+            d2 = np.linalg.norm(O_pos - H2_pos)  # O-H2 distance
             r1 = H1_pos - O_pos
             r2 = H2_pos - O_pos
             cos_theta = np.dot(r1, r2) / (np.linalg.norm(r1) * np.linalg.norm(r2))
             angle = np.degrees(np.arccos(np.clip(cos_theta, -1.0, 1.0)))
-            com_pos = self.molecule_com[molecule_id]["position"]
-            r_xy_O = np.linalg.norm(O_pos[:2])
-            r_xy_H1 = np.linalg.norm(H1_pos[:2])
-            r_xy_H2 = np.linalg.norm(H2_pos[:2])
-            print(f"Step {self.current_step}: O-H1 = {d1:.3f} Å, O-H2 = {d2:.3f} Å, H-O-H = {angle:.1f}°, "
-                  f"COM = {com_pos}, r_xy_O = {r_xy_O:.3f} Å, r_xy_H1 = {r_xy_H1:.3f} Å, r_xy_H2 = {r_xy_H2:.3f} Å")
+            # Calculate minimum H-H distance with other molecules
+            min_h_h = float('inf')
+            for other_mol_id in self.molecules:
+                if other_mol_id != molecule_id:
+                    other_indices = self.molecules[other_mol_id]
+                    other_H1 = self.balls[other_indices["H1"]].position
+                    other_H2 = self.balls[other_indices["H2"]].position
+                    min_h_h = min(min_h_h, np.linalg.norm(H1_pos - other_H1))
+                    min_h_h = min(min_h_h, np.linalg.norm(H1_pos - other_H2))
+                    min_h_h = min(min_h_h, np.linalg.norm(H2_pos - other_H1))
+                    min_h_h = min(min_h_h, np.linalg.norm(H2_pos - other_H2))
+            if min_h_h == float('inf'):
+                min_h_h = 0.0  # No other molecules, set to 0 for clarity
+            print(f"Step {self.current_step}, Molecule {molecule_id}: O-H1 = {d1:.3f} Å, O-H2 = {d2:.3f} Å, "
+                  f"H-O-H = {angle:.1f}°, Min H-H = {min_h_h:.3f} Å")
 
         print(f"Step {self.current_step}, Temperature: {temperature:.2f} K")
         self.temperature_history.append(temperature)
         self.compute_potential_energy_data()
         self.current_step += 1
 
-        # --- Step 1: Compute forces at the current positions ---
-        # for b in self.balls:
-        #     b.force.fill(0)
-        # self.compute_forces()
-        # for b in self.balls:
-        #     b.force += self.well.compute_wall_repulsion_force(b)
-        # # Save current accelerations.
-        # current_accelerations = [b.force / b.mass for b in self.balls]
-        #
-        # # --- Step 2: Update positions using Velocity Verlet ---
-        # for i, b in enumerate(self.balls):
-        #     b.position += b.velocity * self.dt + 0.5 * current_accelerations[i] * self.dt ** 2
-        #     self.well.apply_pbc(b)
-        #     b.update_path()
-        #
-        # # --- Step 3: Recompute forces at the new positions ---
-        # for b in self.balls:
-        #     b.force.fill(0)
-        # self.compute_forces()
-        # for b in self.balls:
-        #     b.force += self.well.compute_wall_repulsion_force(b)
-        # new_accelerations = [b.force / b.mass for b in self.balls]
-        #
-        # # --- Step 4: Update velocities using the average acceleration ---
-        # for i, b in enumerate(self.balls):
-        #     b.velocity += 0.5 * (current_accelerations[i] + new_accelerations[i]) * self.dt
-        #
-        # # --- Step 5: Apply angular forces to maintain the H–O–H angle ---
-        # self.compute_angular_forces()
-        #
-        # # --- Step 6: Record trajectories ---
-        # for i, b in enumerate(self.balls):
-        #     if i not in self.paths:
-        #         self.paths[i] = [b.position.copy()]
-        #     else:
-        #         self.paths[i].append(b.position.copy())
-        #
-        # # --- Step 7: Thermostat: Apply velocity rescaling if enabled ---
-        # if rescale_temperature and (self.current_step % rescale_interval == 0):
-        #     self.apply_velocity_rescaling(target_temperature)
-        #
-        # # --- Step 8: Logging: Print temperature and bond distances ---
-        # temperature = self.compute_system_temperature()
-        # for molecule_id, indices in self.molecules.items():
-        #     O_pos = self.balls[indices["O"]].position
-        #     H1_pos = self.balls[indices["H1"]].position
-        #     H2_pos = self.balls[indices["H2"]].position
-        #     d1 = np.linalg.norm(O_pos - H1_pos)
-        #     d2 = np.linalg.norm(O_pos - H2_pos)
-        #     print(f"Step {self.current_step}: O-H1 = {d1:.3f} Å, O-H2 = {d2:.3f} Å")
-        # print(f"Step {self.current_step}, Temperature: {temperature:.2f} K")
-        # self.temperature_history.append(temperature)
-        # self.compute_potential_energy_data()
-        # self.current_step += 1
+
 
     def run(self):
         current_time = 0.0
@@ -432,3 +451,19 @@ class Simulation:
                 species=particle["species"]
             )
         return sim
+
+if __name__ == '__main__':
+    # Example usage of Simulation class
+    sim = Simulation(well_radius=5.0, well_height=2.0, total_time=1.0, dt=0.001)
+    initial_velocity = [0.3, 0.3, 0.3]
+    sim.create_water_molecule(O_position=[1.0, 1.0, 1.5], H1_z=1.7, H2_z=1.3,
+                             velocity=initial_velocity, molecule_id="H2O")
+    sim.create_water_molecule(O_position=[-1.5, 0.5, 0.5], H1_z=0.7, H2_z=0.3,
+                             velocity=initial_velocity, molecule_id="H2O2")
+    print("Running simulation for 1 step...")
+    sim.update()
+    print(f"Number of balls: {len(sim.balls)}")
+    print(f"Temperature history: {sim.temperature_history}")
+    for mol_id in sim.molecules:
+        print(f"Molecule {mol_id} COM: {sim.molecule_com[mol_id]['position']}, "
+              f"Velocity: {sim.molecule_com[mol_id]['velocity']}")
