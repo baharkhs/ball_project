@@ -18,7 +18,7 @@ class Simulation:
         self.molecule_com = {}  # molecule_id -> {"position": array, "velocity": array, "force": array, "mass": float}
 
         self.interaction_params = {
-            ("H", "H"): {"epsilon": 0.05, "sigma": 2.0, "cutoff": 5.0},  # Adjusted for H-H repulsion
+            ("H", "H"): {"epsilon": 0.05, "sigma": 2.0, "cutoff": 5.0},  # For intermolecular repulsion
             ("O", "O"): {"epsilon": 0.8, "sigma": 0.3, "cutoff": 5.0},
             ("H", "O"): {"epsilon": 0.5, "sigma": 0.2, "cutoff": 4.0}
         }
@@ -115,6 +115,19 @@ class Simulation:
         H1.position = com_pos + offsets["H1"]
         H2.position = com_pos + offsets["H2"]
 
+        # Apply PBC to z-direction for all atoms
+        self.well.apply_pbc(O)
+        self.well.apply_pbc(H1)
+        self.well.apply_pbc(H2)
+
+        # Enforce cylindrical boundary for all atoms (project back if outside radius)
+        for ball in [O, H1, H2]:
+            r_xy = np.linalg.norm(ball.position[:2])
+            if r_xy > self.well.radius:
+                theta = np.arctan2(ball.position[1], ball.position[0])
+                ball.position[0] = self.well.radius * np.cos(theta)
+                ball.position[1] = self.well.radius * np.sin(theta)
+
     def compute_forces(self):
         """
         Computes forces between all pairs. For intramolecular O-H bonds, uses a harmonic potential to maintain bond length.
@@ -122,11 +135,11 @@ class Simulation:
         """
         box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
 
-        # Reset all forces
+        # Reset forces
         for mol_id in self.molecule_com:
             self.molecule_com[mol_id]["force"].fill(0)
 
-        # Compute intermolecular forces (including H-H repulsion)
+        # Intermolecular forces (only between different molecules)
         molecule_ids = list(self.molecules.keys())
         for i in range(len(molecule_ids)):
             for j in range(i + 1, len(molecule_ids)):
@@ -134,7 +147,6 @@ class Simulation:
                 mol2_id = molecule_ids[j]
                 mol1 = self.molecules[mol1_id]
                 mol2 = self.molecules[mol2_id]
-                # Pairwise interactions between all atoms of different molecules
                 for idx1 in mol1.values():
                     for idx2 in mol2.values():
                         bi = self.balls[idx1]
@@ -146,7 +158,7 @@ class Simulation:
                         delta = bi.position - bj.position
                         delta -= box_lengths * np.round(delta / box_lengths)
                         r = np.linalg.norm(delta)
-                        if r==0 or r > params["cutoff"]:
+                        if r == 0 or r > params["cutoff"]:
                             continue
                         sr = params["sigma"] / r
                         sr6 = sr ** 6
@@ -155,16 +167,17 @@ class Simulation:
                         max_force = 50.0
                         force_magnitude = min(force_magnitude, max_force)
                         f_lj = force_magnitude * (delta / r)
-                        # Apply force to molecule COMs
                         self.molecule_com[mol1_id]["force"] += f_lj
                         self.molecule_com[mol2_id]["force"] -= f_lj
 
-        # Add wall repulsion forces to each molecule's COM
-        for mol_id in self.molecule_com:
-            com = self.molecule_com[mol_id]
-            # Compute wall force based on COM position
-            wall_force = self.well.compute_wall_repulsion_force_com(com["position"])
-            com["force"] += wall_force
+        # Wall repulsion for each atom (O and H) individually
+        for mol_id in self.molecules:
+            indices = self.molecules[mol_id]
+            for atom_idx in indices.values():
+                ball = self.balls[atom_idx]
+                wall_force = self.well.compute_wall_repulsion_force(ball, repulsion_constant=500.0,
+                                                                    wall_decay_length=0.05)
+                self.molecule_com[mol_id]["force"] += wall_force
 
 
     def compute_angular_forces(self, k_angle=500.0, theta_target=np.radians(104.5)):
@@ -288,37 +301,29 @@ class Simulation:
             print("No balls in the simulation.")
             return
 
-            # Step 1: Compute forces on molecule COMs
         self.compute_forces()
         current_accelerations = {mol_id: com["force"] / com["mass"] for mol_id, com in self.molecule_com.items()}
 
-        # Step 2: Update COM positions and velocities (Velocity Verlet)
         for mol_id, com in self.molecule_com.items():
-            # Update position
-            com["position"] += com["velocity"] * self.dt + 0.5 * current_accelerations[mol_id] * self.dt ** 2
-            # Apply PBC to COM
-            self.well.apply_pbc_com(com["position"], self.well.height, self.well.radius)
-            # Update atom positions to maintain rigid geometry
+            new_position = com["position"] + com["velocity"] * self.dt + 0.5 * current_accelerations[
+                mol_id] * self.dt ** 2
+            self.well.apply_pbc_com(new_position, self.well.height, self.well.radius)
+            com["position"] = new_position
             self.update_molecule_positions(mol_id)
 
-        # Step 3: Recompute forces at new positions
         self.compute_forces()
         new_accelerations = {mol_id: com["force"] / com["mass"] for mol_id, com in self.molecule_com.items()}
 
-        # Step 4: Update COM velocities
         for mol_id in self.molecule_com:
             com = self.molecule_com[mol_id]
             com["velocity"] += 0.5 * (current_accelerations[mol_id] + new_accelerations[mol_id]) * self.dt
 
-        # Step 5: Record trajectories (for each atom)
         for i, b in enumerate(self.balls):
             self.paths[i].append(b.position.copy())
 
-        # Step 6: Thermostat
         if rescale_temperature and (self.current_step % rescale_interval == 0):
             self.apply_velocity_rescaling(target_temperature)
 
-        # Step 7: Logging
         temperature = self.compute_system_temperature()
         for molecule_id, indices in self.molecules.items():
             O_pos = self.balls[indices["O"]].position
@@ -330,7 +335,13 @@ class Simulation:
             r2 = H2_pos - O_pos
             cos_theta = np.dot(r1, r2) / (np.linalg.norm(r1) * np.linalg.norm(r2))
             angle = np.degrees(np.arccos(np.clip(cos_theta, -1.0, 1.0)))
-            print(f"Step {self.current_step}: O-H1 = {d1:.3f} Å, O-H2 = {d2:.3f} Å, H-O-H = {angle:.1f}°")
+            com_pos = self.molecule_com[molecule_id]["position"]
+            r_xy_O = np.linalg.norm(O_pos[:2])
+            r_xy_H1 = np.linalg.norm(H1_pos[:2])
+            r_xy_H2 = np.linalg.norm(H2_pos[:2])
+            print(f"Step {self.current_step}: O-H1 = {d1:.3f} Å, O-H2 = {d2:.3f} Å, H-O-H = {angle:.1f}°, "
+                  f"COM = {com_pos}, r_xy_O = {r_xy_O:.3f} Å, r_xy_H1 = {r_xy_H1:.3f} Å, r_xy_H2 = {r_xy_H2:.3f} Å")
+
         print(f"Step {self.current_step}, Temperature: {temperature:.2f} K")
         self.temperature_history.append(temperature)
         self.compute_potential_energy_data()
