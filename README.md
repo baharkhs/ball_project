@@ -8,10 +8,5 @@ It incorporates principles of physics, random motion, and dynamic visualization.
 To install the package, use the following command:
 
 
-
-###Usage
-
-You can run the animation by executing the animation.py script:
-
 ```bash
 pip install .
