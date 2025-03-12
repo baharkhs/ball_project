@@ -247,22 +247,27 @@ class Simulation:
 
     def update(self, rescale_temperature=True):
         """
-        Performs a simulation step using Velocity Verlet integration:
-          1. Compute forces and current accelerations.
-          2. Update COM positions (first half-step) with PBC.
-          3. Update each molecule's atom positions.
-          4. Recompute forces and update velocities (second half-step).
-          5. Record paths and temperature.
+        Advances the simulation by one time step using a Velocity Verlet integrator.
+        1. Compute forces (which may be zero if molecules are far apart, so initial velocity is key).
+        2. Update positions based on current velocity and acceleration.
+        3. Recompute forces.
+        4. Update velocities.
+        5. Apply periodic boundary conditions and record paths/temperature.
         """
+        # Compute forces and accelerations at current time.
         self.compute_forces()
         acc_current = {mol_id: self.molecule_com[mol_id]["force"] / self.molecule_com[mol_id]["mass"]
                        for mol_id in self.molecule_com}
+
+        # First half-step: update center-of-mass positions of each molecule.
         for mol_id, com in self.molecule_com.items():
-            new_pos = com["position"] + com["velocity"] * self.dt + 0.5 * acc_current[mol_id] * self.dt**2
+            new_pos = com["position"] + com["velocity"] * self.dt + 0.5 * acc_current[mol_id] * (self.dt ** 2)
+            # Enforce periodic boundary conditions for z.
             if new_pos[2] > self.well.height:
                 new_pos[2] -= self.well.height
             elif new_pos[2] < 0:
                 new_pos[2] += self.well.height
+            # For x-y, if outside the cylinder, project back inside.
             r_xy = np.linalg.norm(new_pos[:2])
             if r_xy > self.well.radius:
                 theta = np.arctan2(new_pos[1], new_pos[0])
@@ -271,12 +276,16 @@ class Simulation:
             com["position"] = new_pos
             self.update_molecule_positions(mol_id)
 
+        # Recompute forces after updating positions.
         self.compute_forces()
         acc_new = {mol_id: self.molecule_com[mol_id]["force"] / self.molecule_com[mol_id]["mass"]
                    for mol_id in self.molecule_com}
+
+        # Second half-step: update velocities.
         for mol_id in self.molecule_com:
             self.molecule_com[mol_id]["velocity"] += 0.5 * (acc_current[mol_id] + acc_new[mol_id]) * self.dt
 
+        # Record positions (for visualization) and temperature.
         for i, ball in enumerate(self.balls):
             self.paths[i].append(ball.position.copy())
 
@@ -285,3 +294,4 @@ class Simulation:
 
         self.temperature_history.append(self.compute_system_temperature())
         self.current_step += 1
+
