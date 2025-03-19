@@ -26,6 +26,20 @@ class Ball:
 
     @classmethod
     def create_oxygen(cls, position, velocity, molecule_id, defaults=None):
+        """
+                Factory method to create an oxygen atom with standard properties.
+
+                It uses the 'defaults' dictionary (if provided) to set the mass, color, and size.
+
+                Parameters:
+                  - position: Initial [x, y, z] position.
+                  - velocity: Initial velocity [vx, vy, vz].
+                  - molecule_id: Identifier of the molecule.
+                  - defaults: A dictionary of default parameters (e.g., "oxygen_mass", "oxygen_color", "oxygen_size").
+
+                Returns:
+                  - A new Ball instance representing an oxygen atom.
+                """
         defaults = defaults or {}
         mass = defaults.get("oxygen_mass", 16.0)
         color = defaults.get("oxygen_color", "red")
@@ -34,14 +48,32 @@ class Ball:
 
     @classmethod
     def create_hydrogen(cls, o_position, h_z, velocity, molecule_id, sign=1, defaults=None):
+        """
+            create a hydrogen atom relative to an oxygen atom.
+
+            The hydrogen's position is calculated based on a bond length and an angle.
+            The 'sign' parameter indicates which hydrogen it is (one on one side, one on the opposite side).
+
+            Parameters:
+            - o_position: The oxygen's position [x, y, z]. This is the reference.
+            - h_z: The desired z-coordinate for the hydrogen.
+            - velocity: Initial velocity [vx, vy, vz] for the hydrogen.
+            - molecule_id: Identifier for the molecule.
+            - sign: Determines the direction of the x-y displacement (1 or -1).
+            - defaults: A dictionary with default parameters (e.g., "bond_length", "half_angle_degrees",
+                             "hydrogen_mass", "hydrogen_color", "hydrogen_size").
+
+            Returns:
+            - A new Ball instance representing a hydrogen atom.
+               """
         defaults = defaults or {}
         bond_length = defaults.get("bond_length", 0.957)
         half_angle_deg = defaults.get("half_angle_degrees", 104.5)
         half_angle = np.radians(half_angle_deg) / 2
         displacement = np.array([
-            sign * bond_length * np.sin(half_angle),
-            bond_length * np.cos(half_angle),
-            h_z - o_position[2]
+            sign * bond_length * np.sin(half_angle),  # x-displacement
+            bond_length * np.cos(half_angle),  # y-displacement
+            h_z - o_position[2]  # Difference in z from the oxygen
         ])
         h_position = np.array(o_position) + displacement
         mass = defaults.get("hydrogen_mass", 1.0)
@@ -79,7 +111,16 @@ class Ball:
     def compute_interaction_force(self, other, interaction_params, box_lengths):
         """
         Computes the Lennard–Jones force between this ball and another.
-        Applies periodic boundary conditions and a minimum distance cutoff.
+
+        This force models the attraction and repulsion between atoms.
+
+        Parameters:
+          - other: Another Ball object.
+          - interaction_params: A dictionary containing parameters "epsilon", "sigma", and "cutoff".
+          - box_lengths: Dimensions of the simulation box for applying PBC.
+
+        Returns:
+          - A 3D force vector (NumPy array). If the distance is beyond the cutoff, returns a zero vector.
         """
         species_key = "-".join(sorted([self.species, other.species]))
         params = interaction_params.get(species_key, {"epsilon": 1.0, "sigma": 1.0, "cutoff": 2.5})

@@ -16,7 +16,6 @@ class Simulation:
     ):
         """
         Creates a Simulation with the specified parameters and a Well instance.
-        If well_instance is None, you can optionally create a default well.
         """
         self.dt = dt
         self.total_time = total_time
@@ -25,7 +24,7 @@ class Simulation:
         self.target_temperature = target_temperature
         self.rescale_interval = rescale_interval
 
-        # If we passed in a custom well, use it; else create a default one
+        # Use the provided Well instance; if not given, create a default Well.
         if well_instance is not None:
             self.well = well_instance
         else:
@@ -80,7 +79,7 @@ class Simulation:
             ball_defaults=ball_defaults # Pass the ball defaults
         )
 
-        # Now create the water molecules (or other particles) from the config
+        # Now create the water molecules from the config
         for molecule in config["particles"]["oxygen_molecules"]:
             sim.create_water_molecule(
                 center_position=molecule["center_position"],
@@ -90,17 +89,42 @@ class Simulation:
                 molecule_id=molecule["molecule_id"]
             )
 
+        # Create custom particles if any are defined.
+        for part in config["particles"].get("custom_particles", []):
+            # For a custom particle, we expect a species, a position, and a velocity.
+            species = part.get("species", "X")
+            position = part["position"]
+            velocity = part["velocity"]
+            mass = part.get("mass", ball_defaults.get("default_mass", 1.0))
+            # Create a Ball for this custom particle.
+            b = Ball(species, position, velocity, molecule_id=None, mass=mass)
+            sim.add_ball(b)
+
         return sim
 
     def add_ball(self, ball):
+        """
+                Adds a Ball object to the simulation.
+
+                - ball: a Ball object representing an individual particle.
+                - Updates the paths dictionary for tracking the ball's trajectory.
+
+                Returns the index of the added ball.
+                """
         self.balls.append(ball)
         self.paths[len(self.balls) - 1] = [ball.position.copy()]
         return len(self.balls) - 1
 
     def create_water_molecule(self, center_position, h1_z, h2_z, velocity, molecule_id):
         """
-        Example method to create a water molecule.
-        Adjust if your Ball class uses different creation methods.
+        Method to create a water molecule. It uses the Ball class's methods (create_oxygen and create_hydrogen),
+        passing the default parameters (from ball_defaults). It then groups the created Balls into a molecule,
+        computes the molecule's center-of-mass (COM), and determines the fixed offsets (difference between each atom's position and the COM).
+
+        - center_position: The initial position of the oxygen atom (and approximate center of the molecule).
+        - h1_z, h2_z: The z-coordinates for the two hydrogen atoms.
+        - velocity: The initial velocity vector to assign to the molecule's center-of-mass.
+        - molecule_id: A unique identifier string for this molecule.
         """
         from .ball import Ball  # or you already have it imported at top
 
@@ -134,7 +158,11 @@ class Simulation:
         }
 
     def _get_molecule_pairs(self):
-        """Returns list of pairs of molecule IDs for force calculations."""
+        """Returns list of pairs of molecule IDs for force calculations.
+          This is used for calculating intermolecular forces. For each pair of molecules,
+        the forces between every atom in one molecule and every atom in the other are calculated.
+
+        """
         molecule_ids = list(self.molecules.keys())
         pairs = []
         for i in range(len(molecule_ids)):
@@ -143,7 +171,17 @@ class Simulation:
         return pairs
 
     def compute_forces(self):
-        """Computes forces on each molecule's COM from Lennard-Jones and wall repulsion."""
+        """
+        Computes forces on each molecule's center-of-mass (COM) by:
+
+        1. Resetting the force on each molecule to zero.
+        2. Calculating intermolecular Lennard-Jones (LJ) forces between atoms of different molecules.
+           - For each pair of molecules, for every pair of atoms (one from each molecule), it calculates the distance,
+             applies periodic boundary conditions, and computes the LJ force if within the cutoff.
+           - The forces are then added to the corresponding molecule's net force.
+        3. Calculating wall repulsion forces on each atom and adding these to the molecule's net force.
+        """
+
         # Reset forces
         for mol_id in self.molecule_com:
             self.molecule_com[mol_id]["force"].fill(0)
@@ -189,7 +227,10 @@ class Simulation:
             self.well.apply_pbc(self.balls[idx])
 
     def compute_total_potential_energy(self):
-        """Computes total Lennard-Jones potential energy of the system."""
+        """    Computes the total Lennard-Jones potential energy of the system.
+
+        It sums the pairwise potential energies for each pair of atoms (with periodic boundary conditions applied).
+   """
         total_energy = 0.0
         num_balls = len(self.balls)
         box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
@@ -232,7 +273,15 @@ class Simulation:
             mol["velocity"] *= scale
 
     def perform_monte_carlo_move(self, max_disp=0.1):
-        """Proposes a Monte Carlo move and accepts if total potential energy decreases."""
+        """Performs a Monte Carlo move:
+
+        1. Saves the current positions of all balls.
+        2. Displaces each ball randomly by up to max_disp in each direction.
+        3. Applies periodic boundary conditions.
+        4. Recomputes the total potential energy.
+        5. If the new potential energy is higher than before (move is unfavorable),
+           reverts to the old positions.
+        """
         old_positions = [ball.position.copy() for ball in self.balls]
         old_energy = self.compute_total_potential_energy()
         for ball in self.balls:

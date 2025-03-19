@@ -3,7 +3,7 @@ from src.simulation import Simulation
 from src.plotting import SimulationPlotter
 
 def main(config_path="config.json"):
-    # Load simulation parameters from config.json
+    # Load simulation parameters from config_one_water.json
     with open(config_path, "r") as file:
         config = json.load(file)
 
