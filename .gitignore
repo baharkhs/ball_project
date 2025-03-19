@@ -8,6 +8,10 @@ __pycache__/
 *.obj
 *.dll
 *.pyc
+/bin/
+/build/
+/dist/
+
 
 # Distribution / packaging
 .Python
