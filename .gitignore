@@ -86,8 +86,3 @@ coverage.xml
 *.avi
 *.gif
 *.mov
-
-# Ignore config and example JSON files, if they are environment-specific
-examples/*.json
-config.json
-simulation_output.json
