@@ -305,36 +305,45 @@ class Simulation:
         """
         # Compute forces and accelerations at current time.
         self.compute_forces()
-        acc_current = {mol_id: self.molecule_com[mol_id]["force"] / self.molecule_com[mol_id]["mass"]
-                       for mol_id in self.molecule_com}
+        #acc_current = {mol_id: self.molecule_com[mol_id]["force"] / self.molecule_com[mol_id]["mass"]
+                       #for mol_id in self.molecule_com}
 
-        # First half-step: update center-of-mass positions of each molecule.
-        for mol_id, com in self.molecule_com.items():
-            new_pos = com["position"] + com["velocity"] * self.dt + 0.5 * acc_current[mol_id] * (self.dt ** 2)
-            # Enforce periodic boundary conditions for z.
-            if new_pos[2] > self.well.height:
-                new_pos[2] -= self.well.height
-            elif new_pos[2] < 0:
-                new_pos[2] += self.well.height
-            # For x-y, if outside the cylinder, project back inside.
-            r_xy = np.linalg.norm(new_pos[:2])
-            if r_xy > self.well.radius:
-                theta = np.arctan2(new_pos[1], new_pos[0])
-                new_pos[0] = self.well.radius * np.cos(theta)
-                new_pos[1] = self.well.radius * np.sin(theta)
-            com["position"] = new_pos
-            self.update_molecule_positions(mol_id)
-
-        # Recompute forces after updating positions.
+        # 1) Compute forces on each ball (including the wall repulsion force).
         self.compute_forces()
-        acc_new = {mol_id: self.molecule_com[mol_id]["force"] / self.molecule_com[mol_id]["mass"]
-                   for mol_id in self.molecule_com}
 
-        # Second half-step: update velocities.
-        for mol_id in self.molecule_com:
-            self.molecule_com[mol_id]["velocity"] += 0.5 * (acc_current[mol_id] + acc_new[mol_id]) * self.dt
+        # 2) First half-step: update positions for each ball.
+        for ball in self.balls:
+            # Acceleration = force / mass.
+            a = ball.force / ball.mass
+            # Update position: new_position = old_position + velocity*dt + 0.5*a*dt^2.
+            ball.position += ball.velocity * self.dt + 0.5 * a * (self.dt ** 2)
 
-        # Record positions (for visualization) and temperature.
+        # 3) Recompute forces after updating positions.
+        self.compute_forces()
+
+        # 4) Second half-step: update velocities for each ball.
+        for ball in self.balls:
+            a_new = ball.force / ball.mass
+            ball.velocity += 0.5 * (a + a_new) * self.dt
+
+            # Check if the ball is outside the cylindrical boundary in the x-y plane.
+            r_xy = np.linalg.norm(ball.position[:2])
+            if r_xy > self.well.radius:
+                # Compute the angle in the x-y plane.
+                theta = np.arctan2(ball.position[1], ball.position[0])
+                # Define a 2D normal vector (only x and y components).
+                normal = np.array([np.cos(theta), np.sin(theta)])
+                # Reflect the x-y component of the velocity:
+                v_xy = ball.velocity[:2]
+                # Reflection: v' = v - 2*(v · n)*n
+                ball.velocity[:2] = v_xy - 2 * np.dot(v_xy, normal) * normal
+                # Place the ball at the boundary.
+                ball.position[:2] = normal * self.well.radius
+
+            # Optionally, you can also call self.well.apply_pbc(ball) for the z-axis:
+            ball.position[2] %= self.well.height
+
+        # 6) Record positions (for visualization) and temperature.
         for i, ball in enumerate(self.balls):
             self.paths[i].append(ball.position.copy())
 
