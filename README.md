@@ -48,6 +48,7 @@ This project is designed to be both educational and modular. It simulates a simp
 3. **Install required dependencies:**
     ```bash
    pip install -r requirements.txt
+   pip install .
    
 ## Usage
 
@@ -83,25 +84,15 @@ This uses config_single_ball.json to simulate a single particle.
 Note: The core code remains unchanged. Only the JSON input changes, allowing you to simulate different scenarios without modifying the code.
 
 ## Testing
-Unit tests are provided in the `tests/` folder. To run all tests, execute:
+Unit tests are provided in the `tests/` folder.
 
-    ```bash
-    python -m unittest discover tests
-
+ 
 These tests cover:
 -Initialization of Balls and Wells
 -Force calculations and periodic boundary conditions 
 -Simulation dynamics and integration
 -Visualization data (such as paths and temperature)
 
-## Future Work
-
-- **Extend Molecule Types:**  
-  Support more complex molecules (e.g., CO₂, O₃) beyond water.
-- **Improve Force Models:**  
-  Incorporate more realistic potentials and angular forces.
-- **Optimization:**  
-  Enhance performance for larger systems.
 
 ## License
 
