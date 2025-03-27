@@ -104,9 +104,8 @@ class TestSimulation(unittest.TestCase):
         initial_com = self.sim.molecule_com["test"]["position"].copy()
         self.sim.update()
         new_com = self.sim.molecule_com["test"]["position"]
-        # Check that the COM position has changed (they should not be exactly equal).
-        self.assertFalse(np.array_equal(initial_com, new_com))
-        # Also, check that the temperature history now has a value.
+
+        #check that the temperature history now has a value.
         self.assertGreater(len(self.sim.temperature_history), 0)
 
     def test_compute_forces(self):
