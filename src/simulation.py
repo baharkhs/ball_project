@@ -1,355 +1,401 @@
+# simulation.py
 import numpy as np
 from src.ball import Ball
 from src.well import Well
+import warnings
+import random
+
+# --- Conversion Factors ---
+# Internal Energy [amu*nm²/fs²] to Reporting Unit [kJ/mol]
+INTERNAL_ENERGY_TO_KJ_PER_MOL = 1.0e-6
+# Factor to convert Force [kJ/mol/nm] / Mass [amu] -> Acceleration [nm/fs²]
+FORCE_MASS_TO_ACCEL = 1.0e-6
 
 class Simulation:
+    """
+    Manages atomistic simulation using Velocity Verlet.
+
+    Calculates forces in kJ/mol/nm and applies conversion factor only during
+    acceleration calculation in the integrator step (F/m * FACTOR).
+    Uses Maxwell-Boltzmann initialization for realistic starting velocities.
+    Relies on physical potentials and appropriate timestep (dt_fs) for stability.
+
+    Internal Units: Time(fs), Length(nm), Mass(amu), Velocity(nm/fs).
+    Force Calculation Unit: kJ/mol/nm.
+    Acceleration Unit: nm/fs².
+    Energy Reporting: kJ/mol. Temperature Reporting: K.
+    """
     def __init__(
         self,
-        dt,
-        total_time,
-        movement_type,
-        interaction_params,
-        target_temperature,
-        rescale_interval,
-        well_instance=None,  # <--- Must accept well_instance
-        ball_defaults=None   # <--- Must accept ball_defaults
+        dt_fs, total_time_fs, interaction_params, target_temperature,
+        rescale_interval, well_instance, r0_OH, theta0_HOH,
+        k_stretch_kj_nm2, k_bend_kj_rad2, charge_O, charge_H,
+        k_B_kj, k_e_kj
+        # Note: initial_velocity_magnitude is intentionally removed
     ):
-        """
-        Creates a Simulation with the specified parameters and a Well instance.
-        """
-        self.dt = dt
-        self.total_time = total_time
-        self.movement_type = movement_type
-        self.interaction_params = interaction_params
-        self.target_temperature = target_temperature
-        self.rescale_interval = rescale_interval
+        # --- Essential Simulation Parameters ---
+        self.dt_fs = dt_fs
+        self.total_time_fs = total_time_fs
+        self.target_temperature = target_temperature # K
+        self.rescale_interval = rescale_interval # steps
+        self.well = well_instance # nm
 
-        # Use the provided Well instance; if not given, create a default Well.
-        if well_instance is not None:
-            self.well = well_instance
-        else:
-            self.well = Well(5.0, 4.0)  # fallback if you want
+        # --- Force Field Parameters (kJ/mol based units) ---
+        self.interaction_params = interaction_params # {eps[kJ/mol], sigma[nm], cutoff[nm]}
+        self.r0_OH = r0_OH                # nm
+        self.theta0_HOH = theta0_HOH      # radians
+        self.k_stretch_kj_nm2 = k_stretch_kj_nm2 # kJ/(mol*nm²)
+        self.k_bend_kj_rad2 = k_bend_kj_rad2   # kJ/(mol*rad²)
+        self.charge_O = charge_O          # e
+        self.charge_H = charge_H          # e
+        self.k_B_kj = k_B_kj              # kJ/(mol*K)
+        self.k_e_kj = k_e_kj              # kJ*nm/(mol*e²)
 
-        # Store ball defaults from config (masses, colors, bond lengths, etc.)
-        if ball_defaults is None:
-            ball_defaults = {}
-        self.ball_defaults = ball_defaults
-
-        # Containers for simulation state
-        self.balls = []
-        self.molecules = {}
-        self.molecule_com = {}
-        self.paths = {}
-        self.temperature_history = []
-        self.potential_energy_data = []
+        # --- State Variables ---
         self.current_step = 0
+        self.balls = [] # List of Ball objects
+        self.molecules = {} # Dict mapping molecule_id to atom indices {'mol_id': {'O':idx, 'H1':idx, 'H2':idx}}
+        self.temperature_history = [] # List of temperatures (K)
+        self.potential_energy_history = [] # List of potential energies (kJ/mol)
+        self.acceptance_rate_mc = [] # For optional MC moves
+
+        # --- Validation ---
+        if self.dt_fs <= 0: raise ValueError("dt_fs must be positive.")
+        if self.k_stretch_kj_nm2 < 0 or self.k_bend_kj_rad2 < 0: raise ValueError("Force constants non-negative.")
+        if self.dt_fs > 2.0: warnings.warn(f"dt ({self.dt_fs} fs) may be large. Consider <= 1.0 fs.", UserWarning)
+
 
     @classmethod
     def from_config(cls, config):
-        """
-        Reads parameters from a config dict and returns a fully set-up Simulation.
-        """
-        sim_cfg = config["simulation"]
-        well_cfg = config["well"]
+        """ Factory method to create Simulation instance from config dictionary. """
+        # --- Unit Conversions ---
+        angstrom_to_nm = 0.1
+        k_bond_area_conversion = 100.0 # (kJ/mol/Å²) -> (kJ/mol/nm²)
 
-        # Build a Well from the config
-        well = Well(
-            radius=well_cfg["radius"],
-            height=well_cfg["height"],
-            wall_decay_length=well_cfg.get("wall_decay_length", 0.05),
-            repulsion_constant=well_cfg.get("repulsion_constant", 500.0),
-            atom_radius=well_cfg.get("atom_radius", 0.1)
-        )
+        # --- Extract Config Sections ---
+        sim_cfg = config["simulation"]; well_cfg = config["well"]; ball_cfg = config["ball"]
+        interaction_cfg = config["interaction_params"]; particles_cfg = config["particles"]
 
-        # Interaction parameters from config
-        interaction_params = config.get("interaction_params", {})
+        # --- Build Well ---
+        well = Well( radius=well_cfg["radius"] * angstrom_to_nm, height=well_cfg["height"] * angstrom_to_nm,
+                     wall_decay_length=well_cfg.get("wall_decay_length", 0.1) * angstrom_to_nm,
+                     repulsion_constant=well_cfg.get("repulsion_constant", 2000.0), # Assumed scales force kJ/mol/nm
+                     atom_radius=well_cfg.get("atom_radius", 0.1) * angstrom_to_nm )
 
-        # Ball defaults (mass, color, bond_length, etc.)
-        ball_defaults = config.get("ball", {})
+        # --- Process Config Parameters for __init__ ---
+        r0_OH_nm = ball_cfg['bond_length'] * angstrom_to_nm
+        theta0_HOH_rad = np.radians(ball_cfg['angle_degrees'])
+        k_stretch_kj_nm2 = ball_cfg['k_bond'] * k_bond_area_conversion # kJ/(mol*nm²)
+        k_bend_kj_rad2 = ball_cfg['k_angle'] # kJ/(mol*rad²)
+        charge_O = ball_cfg['oxygen_charge']; charge_H = ball_cfg['hydrogen_charge']
+        interaction_params = {}
+        for key, params in interaction_cfg.items():
+            interaction_params[key] = params.copy()
+            if 'sigma' in params: interaction_params[key]['sigma'] *= angstrom_to_nm
+            if 'cutoff' in params: interaction_params[key]['cutoff'] *= angstrom_to_nm
+        k_B_kj = sim_cfg['boltzmann_constant']; k_e_kj = sim_cfg['coulomb_constant']
+        dt_fs = sim_cfg["dt"]; total_time_fs = sim_cfg["total_time"]
+        target_temperature = sim_cfg["target_temperature"]
+        rescale_interval = sim_cfg["rescale_interval"]
 
-        # Create the Simulation instance
-        sim = cls(
-            dt=sim_cfg["dt"],
-            total_time=sim_cfg["total_time"],
-            movement_type=sim_cfg.get("movement_type", "newtonian"),
-            interaction_params=interaction_params,
-            target_temperature=sim_cfg["target_temperature"],
-            rescale_interval=sim_cfg["rescale_interval"],
-            well_instance=well,         # Pass the Well object
-            ball_defaults=ball_defaults # Pass the ball defaults
-        )
+        # --- Create Simulation Instance (No velocities assigned yet) ---
+        sim = cls( dt_fs=dt_fs, total_time_fs=total_time_fs, interaction_params=interaction_params,
+                   target_temperature=target_temperature, rescale_interval=rescale_interval, well_instance=well,
+                   r0_OH=r0_OH_nm, theta0_HOH=theta0_HOH_rad, k_stretch_kj_nm2=k_stretch_kj_nm2,
+                   k_bend_kj_rad2=k_bend_kj_rad2, charge_O=charge_O, charge_H=charge_H, k_B_kj=k_B_kj,
+                   k_e_kj=k_e_kj ) # NO initial_velocity_magnitude
 
-        # Now create the water molecules from the config
-        for molecule in config["particles"]["oxygen_molecules"]:
-            sim.create_water_molecule(
-                center_position=molecule["center_position"],
-                h1_z=molecule["H1_z"],
-                h2_z=molecule["H2_z"],
-                velocity=sim_cfg["initial_velocity"],
-                molecule_id=molecule["molecule_id"]
-            )
+        # --- Create and Add Balls Temporarily (with zero initial velocity) ---
+        temp_balls_data = [] # Store tuples: (ball_instance, molecule_id, species)
+        mass_O = ball_cfg['oxygen_mass']; mass_H = ball_cfg['hydrogen_mass']
+        oxygen_args = {'mass': mass_O, 'charge': charge_O, 'color': ball_cfg['oxygen_color'], 'size': ball_cfg['oxygen_size']}
+        hydrogen_args = {'mass': mass_H, 'charge': charge_H, 'color': ball_cfg['hydrogen_color'], 'size': ball_cfg['hydrogen_size']}
+        common_defaults = {'bond_length': sim.r0_OH, 'angle_degrees': np.degrees(sim.theta0_HOH)}
+        oxygen_defaults = {**oxygen_args, **common_defaults}; hydrogen_defaults = {**hydrogen_args, **common_defaults}
 
-        # Create custom particles if any are defined.
-        for part in config["particles"].get("custom_particles", []):
-            # For a custom particle, we expect a species, a position, and a velocity.
-            species = part.get("species", "X")
-            position = part["position"]
-            velocity = part["velocity"]
-            mass = part.get("mass", ball_defaults.get("default_mass", 1.0))
-            # Create a Ball for this custom particle.
-            b = Ball(species, position, velocity, molecule_id=None, mass=mass)
-            sim.add_ball(b)
+        for molecule_cfg in particles_cfg.get("oxygen_molecules", []):
+            center_pos_nm = np.array(molecule_cfg["center_position"]) * angstrom_to_nm
+            h1_z_abs_nm = molecule_cfg["H1_z"] * angstrom_to_nm; h2_z_abs_nm = molecule_cfg["H2_z"] * angstrom_to_nm
+            molecule_id = molecule_cfg["molecule_id"]; zero_vel = np.zeros(3)
+            oxygen = Ball.create_oxygen(center_pos_nm, zero_vel, molecule_id, defaults=oxygen_defaults)
+            h1 = Ball.create_hydrogen(center_pos_nm, h1_z_abs_nm, zero_vel, molecule_id, sign=+1, defaults=hydrogen_defaults)
+            h2 = Ball.create_hydrogen(center_pos_nm, h2_z_abs_nm, zero_vel, molecule_id, sign=-1, defaults=hydrogen_defaults)
+            temp_balls_data.append((oxygen, molecule_id, "O")); temp_balls_data.append((h1, molecule_id, "H1")); temp_balls_data.append((h2, molecule_id, "H2"))
+
+        # --- Assign Initial Velocities from Maxwell-Boltzmann ---
+        if target_temperature > 0 and k_B_kj > 0 and temp_balls_data:
+            print(f"Assigning initial velocities for T={target_temperature}K")
+            # v_sigma = sqrt(k_B[kJ/mol/K] * T[K] / mass[amu]) * 1e-3 -> nm/fs
+            conv_factor_v = 1.0e-3
+            for ball_data in temp_balls_data:
+                ball, _, _ = ball_data
+                if ball.mass > 0:
+                    v_sigma = np.sqrt(k_B_kj * target_temperature / ball.mass) * conv_factor_v # nm/fs
+                    ball.velocity = np.random.normal(loc=0.0, scale=v_sigma, size=3) # nm/fs
+        else:
+             print("Warning: Initial velocities set to zero (T=0 or no particles).")
+
+        # --- Finalize Ball List and Molecule Mapping ---
+        mol_map = {}
+        for ball_data in temp_balls_data:
+            ball, mol_id, species_label = ball_data
+            idx = sim.add_ball(ball)
+            if mol_id:
+                if mol_id not in mol_map: mol_map[mol_id] = {}
+                mol_map[mol_id][species_label] = idx # Map O, H1, H2 correctly
+        sim.molecules = mol_map
+
+        sim.remove_com_velocity() # Remove drift after random velocities assigned
+        # Optional: Apply thermostat once immediately to precisely match target T initially
+        # sim.apply_velocity_rescaling()
+        # print(f"Initial Temperature after velocity assignment: {sim.compute_system_temperature():.2f} K") # Debug print
 
         return sim
 
+
     def add_ball(self, ball):
-        """
-                Adds a Ball object to the simulation.
+        """ Adds a ball to the simulation list and returns its index. """
+        idx = len(self.balls); self.balls.append(ball); return idx
 
-                - ball: a Ball object representing an individual particle.
-                - Updates the paths dictionary for tracking the ball's trajectory.
+    # create_water_molecule is primarily conceptual now, used by from_config
 
-                Returns the index of the added ball.
-                """
-        self.balls.append(ball)
-        self.paths[len(self.balls) - 1] = [ball.position.copy()]
-        return len(self.balls) - 1
-
-    def create_water_molecule(self, center_position, h1_z, h2_z, velocity, molecule_id):
-        """
-        Method to create a water molecule. It uses the Ball class's methods (create_oxygen and create_hydrogen),
-        passing the default parameters (from ball_defaults). It then groups the created Balls into a molecule,
-        computes the molecule's center-of-mass (COM), and determines the fixed offsets (difference between each atom's position and the COM).
-
-        - center_position: The initial position of the oxygen atom (and approximate center of the molecule).
-        - h1_z, h2_z: The z-coordinates for the two hydrogen atoms.
-        - velocity: The initial velocity vector to assign to the molecule's center-of-mass.
-        - molecule_id: A unique identifier string for this molecule.
-        """
-        from .ball import Ball  # or you already have it imported at top
-
-        center_position = np.array(center_position, dtype=float)
-        velocity = np.array(velocity, dtype=float)
-
-        # Example usage of Ball's class methods that take 'defaults' as a param
-        oxygen = Ball.create_oxygen(center_position, velocity, molecule_id, defaults=self.ball_defaults)
-        h1 = Ball.create_hydrogen(center_position, h1_z, velocity, molecule_id, sign=1, defaults=self.ball_defaults)
-        h2 = Ball.create_hydrogen(center_position, h2_z, velocity, molecule_id, sign=-1, defaults=self.ball_defaults)
-
-        iO = self.add_ball(oxygen)
-        iH1 = self.add_ball(h1)
-        iH2 = self.add_ball(h2)
-
-        self.molecules[molecule_id] = {"O": iO, "H1": iH1, "H2": iH2}
-
-        positions = [self.balls[iO].position, self.balls[iH1].position, self.balls[iH2].position]
-        masses = [self.balls[iO].mass, self.balls[iH1].mass, self.balls[iH2].mass]
-        com_position = np.average(positions, weights=masses, axis=0)
-        self.molecule_com[molecule_id] = {
-            "position": com_position,
-            "velocity": velocity.copy(),
-            "force": np.zeros(3),
-            "mass": sum(masses),
-            "offsets": {
-                "O": self.balls[iO].position - com_position,
-                "H1": self.balls[iH1].position - com_position,
-                "H2": self.balls[iH2].position - com_position
-            }
-        }
-
-    def _get_molecule_pairs(self):
-        """Returns list of pairs of molecule IDs for force calculations.
-          This is used for calculating intermolecular forces. For each pair of molecules,
-        the forces between every atom in one molecule and every atom in the other are calculated.
-
-        """
-        molecule_ids = list(self.molecules.keys())
-        pairs = []
-        for i in range(len(molecule_ids)):
-            for j in range(i+1, len(molecule_ids)):
-                pairs.append((molecule_ids[i], molecule_ids[j]))
-        return pairs
 
     def compute_forces(self):
-        """
-        Computes forces on each molecule's center-of-mass (COM) by:
+        """ Calculates forces on all balls in kJ/mol/nm. """
+        num_balls = len(self.balls); [ball.force.fill(0.0) for ball in self.balls]
 
-        1. Resetting the force on each molecule to zero.
-        2. Calculating intermolecular Lennard-Jones (LJ) forces between atoms of different molecules.
-           - For each pair of molecules, for every pair of atoms (one from each molecule), it calculates the distance,
-             applies periodic boundary conditions, and computes the LJ force if within the cutoff.
-           - The forces are then added to the corresponding molecule's net force.
-        3. Calculating wall repulsion forces on each atom and adding these to the molecule's net force.
-        """
+        # 1. Intramolecular forces (kJ/mol/nm)
+        if self.k_stretch_kj_nm2 > 0 or self.k_bend_kj_rad2 > 0:
+            for indices in self.molecules.values(): # Assumes indices are O, H1, H2
+                # Error check: Ensure molecule definition is complete before accessing
+                if "O" not in indices or "H1" not in indices or "H2" not in indices: continue
+                O, H1, H2 = self.balls[indices["O"]], self.balls[indices["H1"]], self.balls[indices["H2"]]
+                # Bond Stretching
+                if self.k_stretch_kj_nm2 > 0:
+                    dOH1=H1.position-O.position; rOH1=np.linalg.norm(dOH1)
+                    if rOH1!=0: fOH1=(-self.k_stretch_kj_nm2*(rOH1-self.r0_OH)/rOH1)*dOH1; H1.force+=fOH1; O.force-=fOH1
+                    dOH2=H2.position-O.position; rOH2=np.linalg.norm(dOH2)
+                    if rOH2!=0: fOH2=(-self.k_stretch_kj_nm2*(rOH2-self.r0_OH)/rOH2)*dOH2; H2.force+=fOH2; O.force-=fOH2
+                # Angle Bending
+                if self.k_bend_kj_rad2 > 0:
+                    vOH1=H1.position-O.position; vOH2=H2.position-O.position; nOH1=np.linalg.norm(vOH1); nOH2=np.linalg.norm(vOH2)
+                    if nOH1!=0 and nOH2!=0: # Prevent div by zero
+                        ct=np.clip(np.dot(vOH1,vOH2)/(nOH1*nOH2),-1,1); th=np.arccos(ct); st=np.sqrt(max(0.0, 1.0-ct**2)) # Use max for stability
+                        if st!=0: # Prevent div by zero for collinear
+                            tq=-self.k_bend_kj_rad2*(th-self.theta0_HOH)/st; tH1=tq/nOH1; tH2=tq/nOH2
+                            uOH1=vOH1/nOH1; uOH2=vOH2/nOH2; FH1=tH1*(ct*uOH1-uOH2); FH2=tH2*(ct*uOH2-uOH1); FO=-(FH1+FH2)
+                            H1.force+=FH1; H2.force+=FH2; O.force+=FO
 
-        # Reset forces
-        for mol_id in self.molecule_com:
-            self.molecule_com[mol_id]["force"].fill(0)
-        box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
-        # Intermolecular Lennard-Jones forces.
-        for mol1_id, mol2_id in self._get_molecule_pairs():
-            for idx1 in self.molecules[mol1_id].values():
-                for idx2 in self.molecules[mol2_id].values():
-                    b1 = self.balls[idx1]
-                    b2 = self.balls[idx2]
-                    species_key = "-".join(sorted([b1.species, b2.species]))
-                    if species_key not in self.interaction_params:
-                        continue
-                    params = self.interaction_params[species_key]
-                    delta = b1.position - b2.position
-                    delta -= box_lengths * np.round(delta / box_lengths)
-                    r = np.linalg.norm(delta)
-                    if r == 0 or r > params["cutoff"]:
-                        continue
-                    sr = params["sigma"] / r
-                    sr6 = sr ** 6
-                    sr12 = sr6 ** 2
-                    force_mag = 24 * params["epsilon"] * (2 * sr12 - sr6) / r
-                    max_force = 50.0
-                    force_mag = min(force_mag, max_force)
-                    f_vec = force_mag * (delta / r)
-                    self.molecule_com[mol1_id]["force"] += f_vec
-                    self.molecule_com[mol2_id]["force"] -= f_vec
-
-        # Wall repulsion for each atom.
-        for mol_id, indices in self.molecules.items():
-            for atom_idx in indices.values():
-                ball = self.balls[atom_idx]
-                wall_force = self.well.compute_wall_repulsion_force(ball)
-                self.molecule_com[mol_id]["force"] += wall_force
-
-    def update_molecule_positions(self, molecule_id):
-        """Updates positions of all atoms in a molecule based on its COM and stored offsets."""
-        com_pos = self.molecule_com[molecule_id]["position"]
-        offsets = self.molecule_com[molecule_id]["offsets"]
-        for label, idx in self.molecules[molecule_id].items():
-            self.balls[idx].position = com_pos + offsets[label]
-            self.well.apply_pbc(self.balls[idx])
-
-    def compute_total_potential_energy(self):
-        """    Computes the total Lennard-Jones potential energy of the system.
-
-        It sums the pairwise potential energies for each pair of atoms (with periodic boundary conditions applied).
-   """
-        total_energy = 0.0
-        num_balls = len(self.balls)
-        box_lengths = np.array([2 * self.well.radius, 2 * self.well.radius, self.well.height])
+        # 2. Intermolecular forces (kJ/mol/nm)
+        cut_sq_def=self.interaction_params.get("default",{}).get("cutoff",np.inf)**2; cut_sq={k:p.get("cutoff",np.inf)**2 for k,p in self.interaction_params.items()}
         for i in range(num_balls):
-            for j in range(i+1, num_balls):
-                b1 = self.balls[i]
-                b2 = self.balls[j]
-                species_key = "-".join(sorted([b1.species, b2.species]))
-                if species_key not in self.interaction_params:
-                    continue
-                params = self.interaction_params[species_key]
-                delta = b1.position - b2.position
-                delta -= box_lengths * np.round(delta / box_lengths)
-                r = np.linalg.norm(delta)
-                if r == 0 or r > params["cutoff"]:
-                    continue
-                sr = params["sigma"] / r
-                sr6 = sr ** 6
-                sr12 = sr6 ** 2
-                energy = 4 * params["epsilon"] * (sr12 - sr6)
-                total_energy += energy
-        return total_energy
+            bi=self.balls[i]; qi=bi.charge
+            for j in range(i + 1, num_balls): # Pair loop
+                bj=self.balls[j]
+                # Skip intramolecular non-bonded
+                if bi.molecule_id is not None and bi.molecule_id == bj.molecule_id: continue
+                # Distance vector + PBC
+                delta=bi.position-bj.position; delta[2]-=self.well.height*np.round(delta[2]/self.well.height)
+                r_sq=np.dot(delta,delta)
+                # Check cutoff & non-overlap
+                spk="-".join(sorted([bi.species,bj.species])); cutoff_sq=cut_sq.get(spk, cut_sq_def)
+                if r_sq < cutoff_sq and r_sq != 0:
+                    r=np.sqrt(r_sq); du=delta/r; f_nb=np.zeros(3)
+                    # LJ Force
+                    ljp=self.interaction_params.get(spk, self.interaction_params.get("default"))
+                    if ljp: eps=ljp.get("epsilon",0); sig=ljp.get("sigma",0)
+                    if eps>0 and sig>0: sr=sig/r; sr6=sr**6; ljm=(24*eps/r)*(2*sr6**2-sr6); f_nb+=ljm*du
+                    # Coulomb Force
+                    qj=bj.charge
+                    if qi!=0 and qj!=0: clm=(self.k_e_kj*qi*qj/r_sq); f_nb+=clm*du
+                    # Apply force
+                    bi.force+=f_nb; bj.force-=f_nb
 
-    def compute_system_temperature(self):
-        """Calculates system temperature from COM kinetic energies."""
-        k_B = 0.0083144621
-        total_kinetic = 0.0
-        for mol in self.molecule_com.values():
-            total_kinetic += 0.5 * mol["mass"] * np.dot(mol["velocity"], mol["velocity"])
-        n_mol = len(self.molecule_com)
-        return (2 / (3 * n_mol * k_B)) * total_kinetic if n_mol > 0 else 0.0
-
-    def apply_velocity_rescaling(self):
-        """Rescales molecule velocities to maintain target temperature."""
-        current_temp = self.compute_system_temperature()
-        if current_temp == 0:
-            return
-        scale = np.sqrt(self.target_temperature / current_temp)
-        for mol in self.molecule_com.values():
-            mol["velocity"] *= scale
-
-    def perform_monte_carlo_move(self, max_disp=0.1):
-        """Performs a Monte Carlo move:
-
-        1. Saves the current positions of all balls.
-        2. Displaces each ball randomly by up to max_disp in each direction.
-        3. Applies periodic boundary conditions.
-        4. Recomputes the total potential energy.
-        5. If the new potential energy is higher than before (move is unfavorable),
-           reverts to the old positions.
-        """
-        old_positions = [ball.position.copy() for ball in self.balls]
-        old_energy = self.compute_total_potential_energy()
+        # 3. Wall Repulsion forces (kJ/mol/nm)
         for ball in self.balls:
-            displacement = np.random.uniform(-max_disp, max_disp, size=3)
-            ball.position += displacement
+            ball.force += self.well.compute_wall_repulsion_force(ball) # Expects kJ/mol/nm
+
+
+    def update(self):
+        """ Advances simulation by dt_fs using Velocity Verlet. """
+        # --- VV Step 1 & 2: Update v(t+dt/2), x(t+dt) ---
         for ball in self.balls:
-            self.well.apply_pbc(ball)
-        new_energy = self.compute_total_potential_energy()
-        if new_energy > old_energy:
-            for i, ball in enumerate(self.balls):
-                ball.position = old_positions[i]
+            # Check mass to prevent division by zero during acceleration calculation
+            if ball.mass == 0: continue # Skip particles with zero mass
+            acc = (ball.force / ball.mass) * FORCE_MASS_TO_ACCEL # a = F/m * factor -> nm/fs²
+            ball.velocity += 0.5 * acc * self.dt_fs # v(t+dt/2)
+            ball.skip_path_update = False
+            ball.position += ball.velocity * self.dt_fs # x(t+dt)
+            # --- Boundaries ---
+            if ball.position[2]<0 or ball.position[2]>=self.well.height: ball.position[2]%=self.well.height; ball.skip_path_update=True # Z PBC
+            r_sq=ball.position[0]**2+ball.position[1]**2 # XY Reflect
+            if r_sq > self.well.radius**2:
+                r=np.sqrt(r_sq); f=self.well.radius/r; ball.position[0]*=f; ball.position[1]*=f
+                if r!=0: # Reflect velocity if not on axis
+                    nx=ball.position[0]/self.well.radius; ny=ball.position[1]/self.well.radius
+                    vd=ball.velocity[0]*nx + ball.velocity[1]*ny
+                    if vd>0: ball.velocity[0]-=2*vd*nx; ball.velocity[1]-=2*vd*ny
+                ball.skip_path_update=True
 
-    def update(self, rescale_temperature=True):
-        """
-        Advances the simulation by one time step using a Velocity Verlet integrator.
-        1. Compute forces (which may be zero if molecules are far apart, so initial velocity is key).
-        2. Update positions based on current velocity and acceleration.
-        3. Recompute forces.
-        4. Update velocities.
-        5. Apply periodic boundary conditions and record paths/temperature.
-        """
-        # Compute forces and accelerations at current time.
-        self.compute_forces()
-        #acc_current = {mol_id: self.molecule_com[mol_id]["force"] / self.molecule_com[mol_id]["mass"]
-                       #for mol_id in self.molecule_com}
+        # --- VV Step 3: Recalculate forces F(t+dt) ---
+        self.compute_forces() # Calculate F(t+dt) in kJ/mol/nm
 
-        # 1) Compute forces on each ball (including the wall repulsion force).
-        self.compute_forces()
-
-        # 2) First half-step: update positions for each ball.
+        # --- VV Step 4: Update velocities v(t+dt) ---
         for ball in self.balls:
-            # Acceleration = force / mass.
-            a = ball.force / ball.mass
-            # Update position: new_position = old_position + velocity*dt + 0.5*a*dt^2.
-            ball.position += ball.velocity * self.dt + 0.5 * a * (self.dt ** 2)
+            if ball.mass == 0: continue # Skip particles with zero mass
+            acc = (ball.force / ball.mass) * FORCE_MASS_TO_ACCEL # a(t+dt) -> nm/fs²
+            ball.velocity += 0.5 * acc * self.dt_fs # v(t+dt)
 
-        # 3) Recompute forces after updating positions.
-        self.compute_forces()
-
-        # 4) Second half-step: update velocities for each ball.
-        for ball in self.balls:
-            a_new = ball.force / ball.mass
-            ball.velocity += 0.5 * (a + a_new) * self.dt
-
-            # Check if the ball is outside the cylindrical boundary in the x-y plane.
-            r_xy = np.linalg.norm(ball.position[:2])
-            if r_xy > self.well.radius:
-                # Compute the angle in the x-y plane.
-                theta = np.arctan2(ball.position[1], ball.position[0])
-                # Define a 2D normal vector (only x and y components).
-                normal = np.array([np.cos(theta), np.sin(theta)])
-                # Reflect the x-y component of the velocity:
-                v_xy = ball.velocity[:2]
-                # Reflection: v' = v - 2*(v · n)*n
-                ball.velocity[:2] = v_xy - 2 * np.dot(v_xy, normal) * normal
-                # Place the ball at the boundary.
-                ball.position[:2] = normal * self.well.radius
-
-            # Optionally, you can also call self.well.apply_pbc(ball) for the z-axis:
-            ball.position[2] %= self.well.height
-
-        # 6) Record positions (for visualization) and temperature.
-        for i, ball in enumerate(self.balls):
-            self.paths[i].append(ball.position.copy())
-
-        if rescale_temperature and (self.current_step % self.rescale_interval == 0):
+        # --- Thermostat (Less Frequent) ---
+        if self.rescale_interval > 0 and self.current_step > 0 and (self.current_step % self.rescale_interval == 0):
             self.apply_velocity_rescaling()
 
+        # --- Recording & Step Increment ---
         self.temperature_history.append(self.compute_system_temperature())
+        # Optionally calculate PE here
+        # self.potential_energy_history.append(self.compute_total_potential_energy())
+        for ball in self.balls: ball.update_path()
         self.current_step += 1
 
+
+    def compute_system_temperature(self):
+        """ Calculates instantaneous kinetic temperature in K. """
+        if not self.balls: return 0.0;
+        # KE[amu*nm²/fs²] -> KE[kJ/mol]
+        tke_kj = sum(0.5 * b.mass * np.dot(b.velocity, b.velocity) for b in self.balls) * INTERNAL_ENERGY_TO_KJ_PER_MOL
+        n_atoms_with_mass = sum(1 for b in self.balls if b.mass > 0) # Count only atoms with mass
+        if n_atoms_with_mass == 0: return 0.0
+        degrees_of_freedom = 3 * n_atoms_with_mass # Use DOF based on atoms that can move
+        if self.k_B_kj == 0: return 0.0
+        temperature = (2.0 * tke_kj) / (degrees_of_freedom * self.k_B_kj) # T = 2*KE / (Ndf*kB)
+        # Handle potential negative temperatures from numerical noise at low T
+        return max(0.0, temperature) # Ensure temperature is non-negative
+
+    def apply_velocity_rescaling(self):
+        """ Applies Berendsen thermostat velocity scaling. """
+        current_temp = self.compute_system_temperature()
+        # Avoid division by zero or sqrt of negative if T is zero or target T is negative
+        if current_temp <= 1e-9 or self.target_temperature <= 0: return # Add back a small check for current_temp
+        scale_factor = np.sqrt(self.target_temperature / current_temp)
+        for ball in self.balls: ball.velocity *= scale_factor
+
+    def remove_com_velocity(self):
+        """ Subtracts center-of-mass velocity. """
+        movable_balls = [b for b in self.balls if b.mass > 0]
+        if not movable_balls: return
+        total_mass = sum(b.mass for b in movable_balls)
+        if total_mass == 0: return # Should not happen if movable_balls is not empty
+        total_momentum = np.sum([b.mass * b.velocity for b in movable_balls], axis=0) # amu*nm/fs
+        com_velocity = total_momentum / total_mass # nm/fs
+        # Apply only to balls that can move
+        for ball in movable_balls: ball.velocity -= com_velocity
+
+
+    # --- compute_total_potential_energy (Corrected Indentation) ---
+    # In simulation.py
+
+    def compute_total_potential_energy(self):
+        """ Computes total potential energy in kJ/mol. """
+        pe_bond_angle_kj = 0.0  # Accumulate kJ/mol for intramolecular
+        pe_nonbond_kj = 0.0  # Accumulate kJ/mol for intermolecular
+
+        # 1. Intramolecular PE (Units: kJ/mol)
+        # Check if intramolecular forces are active
+        if self.k_stretch_kj_nm2 > 0 or self.k_bend_kj_rad2 > 0:
+            # Loop through EACH molecule
+            for molecule_id, indices in self.molecules.items():
+                # Get the Ball objects for this molecule
+                O = self.balls[indices["O"]]
+                H1 = self.balls[indices["H1"]]
+                H2 = self.balls[indices["H2"]]
+
+                # Bond PE: U = 0.5 * k_kj_nm2 * (r - r0)² -> kJ/mol
+                if self.k_stretch_kj_nm2 > 0 and self.r0_OH > 0:
+                    delta_OH1 = H1.position - O.position
+                    r_OH1 = np.linalg.norm(delta_OH1)
+                    pe_bond_angle_kj += 0.5 * self.k_stretch_kj_nm2 * (r_OH1 - self.r0_OH) ** 2
+
+                    delta_OH2 = H2.position - O.position
+                    r_OH2 = np.linalg.norm(delta_OH2)
+                    pe_bond_angle_kj += 0.5 * self.k_stretch_kj_nm2 * (r_OH2 - self.r0_OH) ** 2
+
+                # Angle PE: U = 0.5 * k_kj_rad2 * (theta - theta0)² -> kJ/mol
+                if self.k_bend_kj_rad2 > 0:
+                    vec_OH1 = H1.position - O.position
+                    vec_OH2 = H2.position - O.position
+                    norm_OH1 = np.linalg.norm(vec_OH1)
+                    norm_OH2 = np.linalg.norm(vec_OH2)
+                    # Ensure norms are non-zero before calculating angle
+                    if norm_OH1 != 0 and norm_OH2 != 0:
+                        dot_p = np.dot(vec_OH1, vec_OH2)
+                        cos_t = np.clip(dot_p / (norm_OH1 * norm_OH2), -1.0, 1.0)
+                        theta = np.arccos(cos_t)  # radians
+                        pe_bond_angle_kj += 0.5 * self.k_bend_kj_rad2 * (theta - self.theta0_HOH) ** 2
+        # --- End of loop through molecules ---
+
+        # 2. Intermolecular PE (Already kJ/mol)
+        num_balls = len(self.balls)
+        cutoff_sq_default = self.interaction_params.get("default", {}).get("cutoff", np.inf) ** 2
+        interaction_cutoff_sq = {k: p.get("cutoff", np.inf) ** 2 for k, p in self.interaction_params.items()}
+
+        # Loop through unique pairs of atoms
+        for i in range(num_balls):
+            ball_i = self.balls[i]
+            q_i = ball_i.charge
+            for j in range(i + 1, num_balls):
+                ball_j = self.balls[j]
+
+                # Skip pairs within the same molecule
+                if ball_i.molecule_id is not None and ball_i.molecule_id == ball_j.molecule_id:
+                    continue
+
+                # Calculate distance with PBC
+                delta = ball_i.position - ball_j.position
+                delta[2] -= self.well.height * np.round(delta[2] / self.well.height)
+                r_sq = np.dot(delta, delta)
+
+                # Determine interaction type and cutoff
+                species_key = "-".join(sorted([ball_i.species, ball_j.species]))
+                cutoff_sq = interaction_cutoff_sq.get(species_key, cutoff_sq_default)
+
+                # Calculate potential if within cutoff and not exactly overlapping
+                if r_sq < cutoff_sq and r_sq != 0:
+                    r = np.sqrt(r_sq)
+
+                    # LJ PE (kJ/mol)
+                    ljp = self.interaction_params.get(species_key, self.interaction_params.get("default"))
+                    if ljp:
+                        eps = ljp.get("epsilon", 0)
+                        sig = ljp.get("sigma", 0)
+                        if eps > 0 and sig > 0:
+                            sr = sig / r
+                            sr6 = sr ** 6
+                            pe_nonbond_kj += 4.0 * eps * (sr6 ** 2 - sr6)  # U = 4*eps*((sigma/r)^12 - (sigma/r)^6)
+
+                    # Coulomb PE (kJ/mol)
+                    q_j = ball_j.charge
+                    if q_i != 0 and q_j != 0:
+                        pe_nonbond_kj += self.k_e_kj * q_i * q_j / r  # U = k_e * q_i * q_j / r
+
+        # 3. Wall PE (Optional - Requires Well method returning kJ/mol)
+        # pe_wall_kj = sum(self.well.compute_wall_potential_kj_mol(ball) for ball in self.balls if hasattr(self.well, 'compute_wall_potential_kj_mol'))
+        # pe_nonbond_kj += pe_wall_kj
+
+        # Return sum of intramolecular and intermolecular potential energies
+        return pe_bond_angle_kj + pe_nonbond_kj
+
+
+    # --- perform_monte_carlo_move (Corrected Assignment on Reject) ---
+    def perform_monte_carlo_move(self,max_disp_nm=0.01,temperature_mc=None):
+        if not self.balls: return; temp=temperature_mc if temperature_mc is not None else self.target_temperature
+        old_pos=[b.position.copy() for b in self.balls]; old_E=self.compute_total_potential_energy()
+        for b in self.balls: b.position+=np.random.uniform(-max_disp_nm,max_disp_nm,3); b.position[2]%=self.well.height; rsq=b.position[0]**2+b.position[1]**2
+        if rsq>self.well.radius**2: f=self.well.radius/np.sqrt(rsq); b.position[0]*=f; b.position[1]*=f
+        new_E=self.compute_total_potential_energy(); dE=new_E-old_E; accept=(dE<=0)
+        if not accept and temp>0 and self.k_B_kj>0: bf=np.exp(-dE/(self.k_B_kj*temp)); accept=(random.random()<bf)
+        if accept: self.potential_energy_history.append(new_E); [b.update_path() for b in self.balls]; self.acceptance_rate_mc.append(1)
+        else:
+            # Correct way to restore positions
+            for i, ball in enumerate(self.balls): ball.position = old_pos[i]
+            self.potential_energy_history.append(old_E); self.acceptance_rate_mc.append(0)
+        self.temperature_history.append(self.compute_system_temperature()); self.current_step+=1

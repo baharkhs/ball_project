@@ -1,81 +1,47 @@
+# well.py
 import numpy as np
 
 class Well:
+    """ Cylindrical simulation container. Calculates wall repulsion force. """
     def __init__(self, radius, height, wall_decay_length=0.05, repulsion_constant=500.0, atom_radius=0.1):
-        """
-               Initializes a Well object, which represents the cylindrical container where the simulation occurs.
-
-               Parameters:
-                 - radius: The radius (in angstroms or your chosen unit) of the cylindrical boundary.
-                 - height: The height of the cylinder (defining the z-axis limits).
-                 - wall_decay_length: A parameter that determines how quickly the repulsive force from the wall decreases
-                                      with distance (smaller values mean a sharper drop-off).
-                 - repulsion_constant: A scaling constant that determines the strength of the repulsive force when a particle
-                                       gets too close to the wall.
-                 - atom_radius: The radius of an individual atom/particle. This is used to adjust the effective boundary so that
-                                the entire atom is kept inside the well.
-               """
-        self.radius = radius
-        self.height = height
-        self.wall_decay_length = wall_decay_length
+        self.radius = radius # nm
+        self.height = height # nm
+        self.wall_decay_length = wall_decay_length # nm
+        # Assumes repulsion_constant scales force directly in kJ/mol/nm units
         self.repulsion_constant = repulsion_constant
-        self.atom_radius = atom_radius
-
-    def apply_pbc(self, ball):
-        """
-                Applies Periodic Boundary Conditions (PBC) to a given ball (particle). This ensures that if a particle
-                moves beyond the boundary in one direction, it reappears on the opposite side.
-
-                For this Well:
-                  - The z-coordinate is wrapped around so that it always stays between 0 and the well's height.
-                  - The x-y coordinates are checked: if the particle is outside the circular boundary (the cylinder's wall),
-                    its x-y position is scaled back to the edge of the circle.
-
-                Parameter:
-                  - ball: A Ball object that must have a 'position' attribute (a 3-element NumPy array).
-                """
-        # Wrap the z-coordinate within the well height.
-        ball.position[2] %= self.height
-        # Constrain the x-y coordinates within the cylinder (if needed, scaling them down).
-        r_xy = np.linalg.norm(ball.position[:2])
-        if r_xy > self.radius:
-            ball.position[:2] *= self.radius / r_xy
+        self.atom_radius = atom_radius # nm
 
     def compute_wall_repulsion_force(self, ball):
         """
-        Computes a repulsive force for a ball if it gets too close to the cylindrical wall.
-        The force is calculated based on an exponential decay that depends on how far past a threshold the ball is.
-         Parameter:
-          - ball: A Ball object with a 'position' attribute.
-
-        Returns:
-          - A 3D NumPy array representing the force vector. The x and y components may be non-zero if the ball is near the wall;
+        Computes wall repulsive force in kJ/mol/nm.
         """
-        force = np.zeros(3)
-        # Compute radial distance in x-y plane.
-        r_xy = np.linalg.norm(ball.position[:2])
-        # Effective boundary: well radius adjusted for the ball's radius.
-        effective_radius = self.radius - self.atom_radius
-        # Check if the ball is within a zone near the boundary.
-        if r_xy > effective_radius - self.wall_decay_length:
-            # Determine the overlap past the safe zone.
-            overlap = r_xy - (effective_radius - self.wall_decay_length)
-            if overlap > 0:
-                theta = np.arctan2(ball.position[1], ball.position[0])
-                # The normal points inward.
-                normal = np.array([np.cos(theta), np.sin(theta), 0.0])
-                # Compute a repulsion magnitude that decays exponentially with overlap.
-                force_magnitude = -self.repulsion_constant * np.exp(-overlap / self.wall_decay_length)
-                force[:2] = force_magnitude * normal[:2]
-        return force
+        force_kj_mol_nm = np.zeros(3) # Units: kJ/mol/nm
+        pos_x, pos_y = ball.position[0], ball.position[1]
+        r_xy_sq = pos_x**2 + pos_y**2
+        r_xy = np.sqrt(r_xy_sq) # nm
+
+        effective_radius = self.radius - self.atom_radius # nm
+        d_from_effective = r_xy - effective_radius # nm
+
+        # Apply force if near or past the effective radius
+        if d_from_effective > -self.wall_decay_length:
+            force_mag_kj_mol_nm = 0.0
+            outward_normal = np.array([0.0, 0.0, 0.0])
+            # Calculate normal and magnitude only if not exactly on axis
+            if r_xy != 0:
+                 nx = pos_x / r_xy; ny = pos_y / r_xy
+                 outward_normal[:2] = [nx, ny]
+                 # Force magnitude using exponential decay, scaled by repulsion_constant
+                 force_mag_kj_mol_nm = self.repulsion_constant * np.exp(d_from_effective / self.wall_decay_length)
+
+            # Force vector points inward
+            force_kj_mol_nm[:2] = -force_mag_kj_mol_nm * outward_normal[:2]
+
+        return force_kj_mol_nm # Return force in kJ/mol/nm
 
     def plot_boundary(self, ax):
-        """
-        Plots the cylindrical boundary of the well for visualization.
-        """
-        theta = np.linspace(0, 2 * np.pi, 100)
-        z = np.linspace(0, self.height, 50)
-        theta, z = np.meshgrid(theta, z)
-        x = self.radius * np.cos(theta)
-        y = self.radius * np.sin(theta)
-        ax.plot_wireframe(x, y, z, color="gray", alpha=0.3)
+        """ Plots the cylindrical boundary wireframe. """
+        theta_vals = np.linspace(0, 2 * np.pi, 100); z_vals = np.linspace(0, self.height, 50)
+        theta_grid, z_grid = np.meshgrid(theta_vals, z_vals)
+        x_grid = self.radius * np.cos(theta_grid); y_grid = self.radius * np.sin(theta_grid)
+        ax.plot_wireframe(x_grid, y_grid, z_grid, color="gray", alpha=0.3, linewidth=0.5)
