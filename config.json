@@ -4,11 +4,11 @@
     "height": 4.0,
     "wall_decay_length": 0.1,
     "atom_radius": 0.1,
-    "repulsion_constant": 2000.0
+    "repulsion_constant": 10000.0
   },
   "simulation": {
     "total_time": 5000.0,
-    "dt": 0.5,
+    "dt": 0.1,
     "target_temperature": 300.0,
     "rescale_interval": 1000,
     "boltzmann_constant": 0.0083144621,
@@ -33,10 +33,7 @@
     "bond_length": 1.0, "angle_degrees": 109.47,
     "k_bond": 8000.0, "k_angle": 300.0,
     "oxygen_color": "blue", "hydrogen_color": "red",
-    "default_color": "gray", "oxygen_size": 10,
-    "hydrogen_size": 6, "default_size": 8
+    "default_color": "gray", "oxygen_size": 10, "hydrogen_size": 6, "default_size": 8
   },
-  "plotting": {
-    "figure_size": [10, 5], "width_ratios": [2, 1]
-  }
+  "plotting": { "figure_size": [10, 5], "width_ratios": [2, 1] }
 }

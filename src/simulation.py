@@ -161,54 +161,79 @@ class Simulation:
 
 
     def compute_forces(self):
-        """ Calculates forces on all balls in kJ/mol/nm. """
+        """ Calculates forces in kJ/mol/nm, applying MIC for bonds/angles in Z. """
         num_balls = len(self.balls); [ball.force.fill(0.0) for ball in self.balls]
+        H = self.well.height # Box height for Z-PBC
 
-        # 1. Intramolecular forces (kJ/mol/nm)
+        # 1. Intramolecular forces (kJ/mol/nm) with Z-MIC
         if self.k_stretch_kj_nm2 > 0 or self.k_bend_kj_rad2 > 0:
-            for indices in self.molecules.values(): # Assumes indices are O, H1, H2
-                # Error check: Ensure molecule definition is complete before accessing
+            for indices in self.molecules.values():
                 if "O" not in indices or "H1" not in indices or "H2" not in indices: continue
                 O, H1, H2 = self.balls[indices["O"]], self.balls[indices["H1"]], self.balls[indices["H2"]]
-                # Bond Stretching
-                if self.k_stretch_kj_nm2 > 0:
-                    dOH1=H1.position-O.position; rOH1=np.linalg.norm(dOH1)
-                    if rOH1!=0: fOH1=(-self.k_stretch_kj_nm2*(rOH1-self.r0_OH)/rOH1)*dOH1; H1.force+=fOH1; O.force-=fOH1
-                    dOH2=H2.position-O.position; rOH2=np.linalg.norm(dOH2)
-                    if rOH2!=0: fOH2=(-self.k_stretch_kj_nm2*(rOH2-self.r0_OH)/rOH2)*dOH2; H2.force+=fOH2; O.force-=fOH2
-                # Angle Bending
-                if self.k_bend_kj_rad2 > 0:
-                    vOH1=H1.position-O.position; vOH2=H2.position-O.position; nOH1=np.linalg.norm(vOH1); nOH2=np.linalg.norm(vOH2)
-                    if nOH1!=0 and nOH2!=0: # Prevent div by zero
-                        ct=np.clip(np.dot(vOH1,vOH2)/(nOH1*nOH2),-1,1); th=np.arccos(ct); st=np.sqrt(max(0.0, 1.0-ct**2)) # Use max for stability
-                        if st!=0: # Prevent div by zero for collinear
-                            tq=-self.k_bend_kj_rad2*(th-self.theta0_HOH)/st; tH1=tq/nOH1; tH2=tq/nOH2
-                            uOH1=vOH1/nOH1; uOH2=vOH2/nOH2; FH1=tH1*(ct*uOH1-uOH2); FH2=tH2*(ct*uOH2-uOH1); FO=-(FH1+FH2)
-                            H1.force+=FH1; H2.force+=FH2; O.force+=FO
 
-        # 2. Intermolecular forces (kJ/mol/nm)
+                # --- Apply MIC to Bond Vectors ---
+                delta_OH1 = H1.position - O.position
+                delta_OH1[2] -= H * np.round(delta_OH1[2] / H) # MIC for Z component
+
+                delta_OH2 = H2.position - O.position
+                delta_OH2[2] -= H * np.round(delta_OH2[2] / H) # MIC for Z component
+                # --- End MIC Application ---
+
+                # Bond Stretching (uses MIC-corrected vectors)
+                if self.k_stretch_kj_nm2 > 0:
+                    rOH1 = np.linalg.norm(delta_OH1) # Norm of MIC vector
+                    if rOH1 != 0:
+                        fOH1_mag = -self.k_stretch_kj_nm2 * (rOH1 - self.r0_OH)
+                        fOH1 = (fOH1_mag / rOH1) * delta_OH1 # Use MIC vector for direction
+                        H1.force += fOH1; O.force -= fOH1
+
+                    rOH2 = np.linalg.norm(delta_OH2) # Norm of MIC vector
+                    if rOH2 != 0:
+                        fOH2_mag = -self.k_stretch_kj_nm2 * (rOH2 - self.r0_OH)
+                        fOH2 = (fOH2_mag / rOH2) * delta_OH2 # Use MIC vector for direction
+                        H2.force += fOH2; O.force -= fOH2
+
+                # Angle Bending (uses MIC-corrected vectors)
+                if self.k_bend_kj_rad2 > 0:
+                    # vec_OH1 and vec_OH2 are now delta_OH1 and delta_OH2 (MIC corrected)
+                    vec_OH1 = delta_OH1
+                    vec_OH2 = delta_OH2
+                    norm_OH1 = np.linalg.norm(vec_OH1) # Norm of MIC vector
+                    norm_OH2 = np.linalg.norm(vec_OH2) # Norm of MIC vector
+
+                    if norm_OH1 != 0 and norm_OH2 != 0:
+                        # Dot product uses MIC vectors
+                        dot_p = np.dot(vec_OH1, vec_OH2)
+                        cos_t = np.clip(dot_p / (norm_OH1 * norm_OH2), -1.0, 1.0)
+                        theta = np.arccos(cos_t); st = np.sqrt(max(0.0, 1.0-cos_t**2))
+
+                        if st != 0:
+                            # Unit vectors use MIC vectors
+                            uOH1 = vec_OH1 / norm_OH1; uOH2 = vec_OH2 / norm_OH2
+                            # Force calculation remains the same structure, but uses MIC vectors/norms
+                            tq = -self.k_bend_kj_rad2 * (theta - self.theta0_HOH) / st
+                            tH1 = tq / norm_OH1; tH2 = tq / norm_OH2
+                            FH1 = tH1 * (cos_t * uOH1 - uOH2); FH2 = tH2 * (cos_t * uOH2 - uOH1); FO = -(FH1 + FH2)
+                            H1.force += FH1; H2.force += FH2; O.force += FO
+
+        # 2. Intermolecular forces (kJ/mol/nm) - Already uses Z-MIC correctly
+        # ... (non-bonded loop remains unchanged) ...
         cut_sq_def=self.interaction_params.get("default",{}).get("cutoff",np.inf)**2; cut_sq={k:p.get("cutoff",np.inf)**2 for k,p in self.interaction_params.items()}
         for i in range(num_balls):
             bi=self.balls[i]; qi=bi.charge
-            for j in range(i + 1, num_balls): # Pair loop
+            for j in range(i + 1, num_balls):
                 bj=self.balls[j]
-                # Skip intramolecular non-bonded
                 if bi.molecule_id is not None and bi.molecule_id == bj.molecule_id: continue
-                # Distance vector + PBC
-                delta=bi.position-bj.position; delta[2]-=self.well.height*np.round(delta[2]/self.well.height)
-                r_sq=np.dot(delta,delta)
-                # Check cutoff & non-overlap
-                spk="-".join(sorted([bi.species,bj.species])); cutoff_sq=cut_sq.get(spk, cut_sq_def)
+                delta=bi.position-bj.position; delta[2]-=H*np.round(delta[2]/H) # Correct MIC
+                r_sq=np.dot(delta,delta); spk="-".join(sorted([bi.species,bj.species]))
+                cutoff_sq=cut_sq.get(spk, cut_sq_def)
                 if r_sq < cutoff_sq and r_sq != 0:
                     r=np.sqrt(r_sq); du=delta/r; f_nb=np.zeros(3)
-                    # LJ Force
                     ljp=self.interaction_params.get(spk, self.interaction_params.get("default"))
-                    if ljp: eps=ljp.get("epsilon",0); sig=ljp.get("sigma",0)
+                    if ljp: eps=ljp.get("epsilon",0); sig=ljp.get("sigma",0) # LJ
                     if eps>0 and sig>0: sr=sig/r; sr6=sr**6; ljm=(24*eps/r)*(2*sr6**2-sr6); f_nb+=ljm*du
-                    # Coulomb Force
-                    qj=bj.charge
+                    qj=bj.charge # Coulomb
                     if qi!=0 and qj!=0: clm=(self.k_e_kj*qi*qj/r_sq); f_nb+=clm*du
-                    # Apply force
                     bi.force+=f_nb; bj.force-=f_nb
 
         # 3. Wall Repulsion forces (kJ/mol/nm)
