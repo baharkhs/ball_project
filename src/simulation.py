@@ -11,8 +11,8 @@ class Simulation:
         interaction_params,
         target_temperature,
         rescale_interval,
-        well_instance=None,  # <--- Must accept well_instance
-        ball_defaults=None   # <--- Must accept ball_defaults
+        well_instance = Well(5.0, 4.0)
+        ball_defaults = {}
     ):
         """
         Creates a Simulation with the specified parameters and a Well instance.
@@ -24,22 +24,10 @@ class Simulation:
         self.target_temperature = target_temperature
         self.rescale_interval = rescale_interval
 
-        # Use the provided Well instance; if not given, create a default Well.
-        if well_instance is not None:
-            self.well = well_instance
-        else:
-            self.well = Well(5.0, 4.0)  # fallback if you want
-
-        # Store ball defaults from config (masses, colors, bond lengths, etc.)
-        if ball_defaults is None:
-            ball_defaults = {}
-        self.ball_defaults = ball_defaults
-
         # Containers for simulation state
         self.balls = []
         self.molecules = {}
         self.molecule_com = {}
-        self.paths = {}
         self.temperature_history = []
         self.potential_energy_data = []
         self.current_step = 0
@@ -107,12 +95,10 @@ class Simulation:
                 Adds a Ball object to the simulation.
 
                 - ball: a Ball object representing an individual particle.
-                - Updates the paths dictionary for tracking the ball's trajectory.
 
                 Returns the index of the added ball.
                 """
         self.balls.append(ball)
-        self.paths[len(self.balls) - 1] = [ball.position.copy()]
         return len(self.balls) - 1
 
     def create_water_molecule(self, center_position, h1_z, h2_z, velocity, molecule_id):
@@ -301,7 +287,7 @@ class Simulation:
         2. Update positions based on current velocity and acceleration.
         3. Recompute forces.
         4. Update velocities.
-        5. Apply periodic boundary conditions and record paths/temperature.
+        5. Apply periodic boundary conditions and record temperature.
         """
         # Compute forces and accelerations at current time.
         self.compute_forces()
@@ -344,9 +330,6 @@ class Simulation:
             ball.position[2] %= self.well.height
 
         # 6) Record positions (for visualization) and temperature.
-        for i, ball in enumerate(self.balls):
-            self.paths[i].append(ball.position.copy())
-
         if rescale_temperature and (self.current_step % self.rescale_interval == 0):
             self.apply_velocity_rescaling()
 
